@@ -141,6 +141,25 @@ class PlayerSettingsScreen extends ConsumerWidget {
                             !playerSettings.swipeSeekEnabled,
                           ),
                     ),
+                    // Auto Skip (v2.9.4): skips the opening and the ending
+                    // automatically, like anime/dramas. Title is a plain
+                    // English literal, the same as 'Maximum volume' below.
+                    SettingsTile(
+                      icon: Icons.fast_forward_rounded,
+                      title: 'Auto Skip',
+                      subtitle: playerSettings.autoSkip
+                          ? l10n.enabled
+                          : l10n.disabled,
+                      trailing: Switch(
+                        value: playerSettings.autoSkip,
+                        onChanged: (val) => ref
+                            .read(playerSettingsProvider.notifier)
+                            .setAutoSkip(val),
+                      ),
+                      onTap: () => ref
+                          .read(playerSettingsProvider.notifier)
+                          .setAutoSkip(!playerSettings.autoSkip),
+                    ),
                   ],
                   SettingsTile(
                     icon: Icons.av_timer_rounded,

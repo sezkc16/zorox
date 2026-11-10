@@ -200,6 +200,10 @@ class PlayerSettings {
   final bool showPlaybackSpeed;
   final bool showEpisodes;
 
+  /// Auto Skip (v2.9.4): automatically skip intro/recap/outro segments
+  /// (opening + ending, like anime/dramas) with no tap. Default on.
+  final bool autoSkip;
+
   // Subtitle Accounts
   final String osUsername;
   final String osPassword;
@@ -242,6 +246,7 @@ class PlayerSettings {
     this.showRotate = true,
     this.showPlaybackSpeed = true,
     this.showEpisodes = true,
+    this.autoSkip = true,
     this.osUsername = '',
     this.osPassword = '',
     this.osApiKey = '',
@@ -286,6 +291,7 @@ class PlayerSettings {
     bool? showRotate,
     bool? showPlaybackSpeed,
     bool? showEpisodes,
+    bool? autoSkip,
     String? osUsername,
     String? osPassword,
     String? osApiKey,
@@ -334,6 +340,7 @@ class PlayerSettings {
       showRotate: showRotate ?? this.showRotate,
       showPlaybackSpeed: showPlaybackSpeed ?? this.showPlaybackSpeed,
       showEpisodes: showEpisodes ?? this.showEpisodes,
+      autoSkip: autoSkip ?? this.autoSkip,
       osUsername: osUsername ?? this.osUsername,
       osPassword: osPassword ?? this.osPassword,
       osApiKey: osApiKey ?? this.osApiKey,
@@ -530,6 +537,12 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
           defaultValue: true,
         ) ??
         true;
+    final autoSkip =
+        storage.getPlayerSetting<bool>(
+          'player_auto_skip',
+          defaultValue: true,
+        ) ??
+        true;
 
     // No defaultValue: an absent key has to stay absent, because null is what
     // Auto is stored as. The old key, player_network_buffer_mb, is never read.
@@ -575,6 +588,7 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       showRotate: showRotate,
       showPlaybackSpeed: showPlaybackSpeed,
       showEpisodes: showEpisodes,
+      autoSkip: autoSkip,
       osUsername: osUser,
       osApiKey: osKey,
       subdlEmail: dlEmail,
@@ -741,6 +755,11 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
   Future<void> setShowEpisodes(bool val) async {
     await _repository.setPlayerSetting('player_show_episodes', val);
     _update((PlayerSettings c) => c.copyWith(showEpisodes: val));
+  }
+
+  Future<void> setAutoSkip(bool val) async {
+    await _repository.setPlayerSetting('player_auto_skip', val);
+    _update((PlayerSettings c) => c.copyWith(autoSkip: val));
   }
 
   Future<void> setSubtitleSettings(

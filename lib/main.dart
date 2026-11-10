@@ -39,6 +39,7 @@ import 'core/widgets/update_dialog.dart';
 import 'core/widgets/app_error_boundary.dart';
 import 'core/services/download_service.dart';
 import 'core/services/notification_service.dart';
+import 'features/account/data/zorox_account_notifier.dart';
 import 'features/player/domain/qoe_log.dart';
 
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -249,6 +250,10 @@ class _MyAppState extends ConsumerState<MyApp> {
     ExtensionPages.shared.dialogs = _showPageDialog;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(downloadServiceProvider).init();
+      // ZoroX Account (v2.9.4): build the account provider at startup so
+      // the session is restored and the auto-sync listeners are live even
+      // if the user never opens the Account screen.
+      ref.read(zoroxAccountProvider);
       unawaited(_loadInstalledExtensions());
       // CloudStream providers are listed from what was installed; no engine starts here.
       // Repositories its plugins add (MegaRepo's) are announced like a collection's.

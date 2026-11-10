@@ -27,6 +27,7 @@ import '../../tracking/sign_in/tracker_sign_in.dart';
 import '../../../core/providers/device_info_provider.dart';
 import '../../../core/storage/settings_repository.dart';
 import '../../../core/services/notification_service.dart';
+import '../../account/presentation/zorox_account_section.dart';
 
 class AccountSettingsScreen extends ConsumerStatefulWidget {
   final bool isEmbedded;
@@ -125,6 +126,8 @@ class _AccountSettingsScreenState extends ConsumerState<AccountSettingsScreen> {
             ),
             children: [
               const SizedBox(height: LayoutConstants.spacingXs),
+              const ZoroxAccountSection(),
+              const SizedBox(height: LayoutConstants.spacingLg),
               SettingsGroup(
                 title: l10n.accounts,
                 children: [

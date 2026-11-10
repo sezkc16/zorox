@@ -1,0 +1,325 @@
+import AVFoundation
+import CoreMedia
+import UIKit
+
+/// Picture-in-picture for a texture-backed player, fed from libVLC's frames.
+///
+/// VLC has no AVPlayerLayer, so the PiP window cannot be an AVPlayerLayer
+/// capture: an AVSampleBufferDisplayLayer is fed the decoded frames instead,
+/// polled off the player's texture renderer, and handed to an
+/// AVPictureInPictureController as its content source.
+///
+/// iOS 15 or later: the sample-buffer content source did not exist before it.
+/// Below that, and on a device with no PiP support, `start()` answers false
+/// and the app hides the button — see
+/// [VlcPlayerPlatformView.startPictureInPicture].
+final class VlcPictureInPictureController: NSObject {
+  /// The player this feeds from. Weak: the player owns this controller.
+  private weak var player: VlcPlayerPlatformView?
+
+  /// Called with the window's state whenever it changes — started, stopped,
+  /// or failed to start — so Dart can hide and show the chrome. See
+  /// [VlcPlayerPlatformView.sendPictureInPictureEvent].
+  private let onStateChanged: (Bool) -> Void
+
+  private var displayLayer: AVSampleBufferDisplayLayer?
+  /// The layer has to live in a window for the PiP controller to take it.
+  /// One point square at the origin: present, but nothing to look at.
+  private var hostView: UIView?
+  private var pipController: AVPictureInPictureController?
+  private var feedTimer: Timer?
+  /// The picture's format, kept while its size holds so a description is not
+  /// built for every frame.
+  private var formatDescription: CMVideoFormatDescription?
+  private var formatWidth = 0
+  private var formatHeight = 0
+  /// Presentation times, when the layer has no timebase to read them from.
+  private var frameIndex = 0
+
+  /// Whether the window is up. The answer to a second start while it is.
+  var isActive: Bool {
+    return pipController?.isPictureInPictureActive ?? false
+  }
+
+  init(player: VlcPlayerPlatformView, onStateChanged: @escaping (Bool) -> Void) {
+    self.player = player
+    self.onStateChanged = onStateChanged
+    super.init()
+  }
+
+  deinit {
+    dispose()
+  }
+
+  /// Opens the PiP window. True means the request went out; the result —
+  /// started, or failed to start — arrives through [onStateChanged].
+  ///
+  /// False when the device cannot do PiP, when the player is view-backed and
+  /// has no texture to feed from, or when there is no picture yet to show.
+  func start() -> Bool {
+    guard !isActive else {
+      return true
+    }
+    guard AVPictureInPictureController.isPictureInPictureSupported() else {
+      return false
+    }
+    guard let player, player.textureRenderer != nil else {
+      return false
+    }
+    if #available(iOS 15.0, *) {
+      return startSampleBufferPiP()
+    } else {
+      return false
+    }
+  }
+
+  /// Closes the PiP window, if one is up. The stop completing is what reports
+  /// it, through [onStateChanged]; when there is no window to close there is
+  /// nothing to report.
+  func stop() {
+    guard let pipController else {
+      return
+    }
+    if pipController.isPictureInPictureActive {
+      pipController.stopPictureInPicture()
+    } else {
+      // Asked to stop before the start landed, or after it failed: no
+      // didStop is coming, so the feed ends here.
+      teardown()
+    }
+  }
+
+  /// Stops the window and drops the feed and the layer, for dispose.
+  ///
+  /// The window's own didStop still fires after this and is a no-op there.
+  /// No state is reported from here: the player is going away with it, and
+  /// Dart's controller is being disposed at the same time.
+  func dispose() {
+    pipController?.stopPictureInPicture()
+    teardown()
+  }
+
+  @available(iOS 15.0, *)
+  private func startSampleBufferPiP() -> Bool {
+    let layer = AVSampleBufferDisplayLayer()
+    layer.videoGravity = .resizeAspect
+    // The layer's own clock, running at host time, so the presentation times
+    // the feed stamps are read against the same clock that advances them.
+    var timebase: CMTimebase?
+    if CMTimebaseCreateWithMasterClock(
+      allocator: kCFAllocatorDefault,
+      masterClock: CMClockGetHostTimeClock(),
+      timebaseOut: &timebase) == noErr,
+      let timebase {
+      layer.controlTimebase = timebase
+      CMTimebaseSetRate(timebase, rate: 1.0)
+    }
+
+    let view = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+    layer.frame = view.bounds
+    view.layer.addSublayer(layer)
+    guard let window = Self.keyWindow else {
+      return false
+    }
+    window.addSubview(view)
+
+    let contentSource = AVPictureInPictureController.ContentSource(
+      sampleBufferDisplayLayer: layer,
+      playbackDelegate: self)
+    let pipController = AVPictureInPictureController(contentSource: contentSource)
+    pipController.delegate = self
+    // The window never opens itself: only the viewer's button does.
+    pipController.canStartPictureInPictureAutomaticallyFromInline = false
+    displayLayer = layer
+    hostView = view
+    self.pipController = pipController
+
+    // One frame first, so the window opens on a picture rather than black,
+    // and so a player with nothing decoded yet answers false instead of
+    // opening a window that can only fail.
+    guard feedFrame() else {
+      teardown()
+      return false
+    }
+    startFeed()
+    pipController.startPictureInPicture()
+    return true
+  }
+
+  /// The window the layer lives in: the key window, or any window at all when
+  /// the scene has not marked one yet.
+  private static var keyWindow: UIWindow? {
+    let windows = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .flatMap(\.windows)
+    return windows.first(where: \.isKeyWindow) ?? windows.first
+  }
+
+  private func startFeed() {
+    feedTimer?.invalidate()
+    // 30 fps: the frame rate libVLC decodes at. The timer holds the block,
+    // the block holds the player weakly, so there is no cycle to break.
+    let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+      _ = self?.feedFrame()
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    feedTimer = timer
+  }
+
+  /// Pulls the newest decoded frame and hands it to the display layer.
+  ///
+  /// True when a frame was enqueued. False when there is none yet, when the
+  /// layer is not ready for another, or when the picture could not be
+  /// wrapped. A repeated frame is enqueued again with a fresh timestamp: the
+  /// layer keeps showing it either way, and a paused picture is a repeated
+  /// frame by definition.
+  @discardableResult
+  private func feedFrame() -> Bool {
+    guard let layer = displayLayer, layer.isReadyForMoreMediaData else {
+      return false
+    }
+    guard let pixelBuffer = player?.textureRenderer?.copyPixelBuffer() else {
+      return false
+    }
+    let width = CVPixelBufferGetWidth(pixelBuffer)
+    let height = CVPixelBufferGetHeight(pixelBuffer)
+    if formatDescription == nil || width != formatWidth || height != formatHeight {
+      var fresh: CMVideoFormatDescription?
+      guard CMVideoFormatDescriptionCreateForImageBuffer(
+        allocator: kCFAllocatorDefault,
+        imageBuffer: pixelBuffer,
+        formatDescriptionOut: &fresh) == noErr,
+        let fresh else {
+        return false
+      }
+      formatDescription = fresh
+      formatWidth = width
+      formatHeight = height
+    }
+    guard let formatDescription else {
+      return false
+    }
+    // "Now", on the layer's own timebase, so the frame is due the moment it
+    // arrives: libVLC hands over no presentation timestamp of its own.
+    var timing = CMSampleTimingInfo(
+      duration: CMTime(value: 1, timescale: 30),
+      presentationTimeStamp: currentPresentationTime(),
+      decodeTimeStamp: .invalid)
+    var sampleBuffer: CMSampleBuffer?
+    guard CMSampleBufferCreateForImageBuffer(
+      allocator: kCFAllocatorDefault,
+      imageBuffer: pixelBuffer,
+      dataReady: true,
+      makeDataReadyCallback: nil,
+      refcon: nil,
+      formatDescription: formatDescription,
+      sampleTiming: &timing,
+      sampleBufferOut: &sampleBuffer) == noErr,
+      let sampleBuffer else {
+      return false
+    }
+    layer.enqueue(sampleBuffer)
+    return true
+  }
+
+  private func currentPresentationTime() -> CMTime {
+    if let timebase = displayLayer?.controlTimebase {
+      return CMTimebaseGetTime(timebase)
+    }
+    // No timebase to read from — the layer was left to its own — so count
+    // frames at the feed rate instead. Still strictly increasing, which is
+    // all the layer asks of a timestamp.
+    frameIndex += 1
+    return CMTime(value: Int64(frameIndex), timescale: 30)
+  }
+
+  /// Ends the feed, drops the layer and lets the PiP controller go.
+  ///
+  /// Idempotent: the window's didStop, a failed start and dispose() all land
+  /// here, and only the first finds anything to do.
+  private func teardown() {
+    feedTimer?.invalidate()
+    feedTimer = nil
+    displayLayer?.flush()
+    displayLayer?.removeFromSuperlayer()
+    displayLayer = nil
+    hostView?.removeFromSuperview()
+    hostView = nil
+    formatDescription = nil
+    formatWidth = 0
+    formatHeight = 0
+    frameIndex = 0
+    pipController = nil
+  }
+}
+
+// MARK: - AVPictureInPictureControllerDelegate
+
+extension VlcPictureInPictureController: AVPictureInPictureControllerDelegate {
+  func pictureInPictureControllerDidStartPictureInPicture(
+    _ pictureInPictureController: AVPictureInPictureController
+  ) {
+    onStateChanged(true)
+  }
+
+  func pictureInPictureControllerDidStopPictureInPicture(
+    _ pictureInPictureController: AVPictureInPictureController
+  ) {
+    teardown()
+    onStateChanged(false)
+  }
+
+  func pictureInPictureControllerFailedToStartPictureInPicture(
+    _ pictureInPictureController: AVPictureInPictureController,
+    error: Error
+  ) {
+    teardown()
+    onStateChanged(false)
+  }
+
+  func pictureInPictureController(
+    _ pictureInPictureController: AVPictureInPictureController,
+    restoreUserInterfaceForPictureInPictureStopWithCompletionHandler completionHandler: @escaping (Bool) -> Void
+  ) {
+    // The app is coming back to the foreground anyway; say so, and the screen
+    // clears its PiP state from the didStop that follows.
+    completionHandler(true)
+  }
+}
+
+// MARK: - AVPictureInPictureSampleBufferPlaybackDelegate
+
+@available(iOS 15.0, *)
+extension VlcPictureInPictureController: AVPictureInPictureSampleBufferPlaybackDelegate {
+  func pictureInPictureControllerTimeRangeForPlayback(
+    _ pictureInPictureController: AVPictureInPictureController
+  ) -> CMTimeRange {
+    return player?.pipTimeRange() ?? CMTimeRange(start: .invalid, duration: .invalid)
+  }
+
+  func pictureInPictureControllerIsPlaybackPaused(
+    _ pictureInPictureController: AVPictureInPictureController
+  ) -> Bool {
+    return !(player?.pipIsPlaying ?? false)
+  }
+
+  func pictureInPictureController(
+    _ pictureInPictureController: AVPictureInPictureController,
+    setPlaying playing: Bool
+  ) {
+    if playing {
+      player?.play()
+    } else {
+      player?.pause()
+    }
+  }
+
+  func pictureInPictureController(
+    _ pictureInPictureController: AVPictureInPictureController,
+    skipByInterval skipInterval: CMTime,
+    completionHandler: @escaping () -> Void
+  ) {
+    player?.pipSkip(by: skipInterval.seconds)
+    completionHandler()
+  }
+}

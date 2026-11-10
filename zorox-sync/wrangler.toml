@@ -1,0 +1,15 @@
+// Wrangler config for the ZoroX sync Worker — OPTIONAL.
+// The dashboard deploy in DEPLOY.md needs none of this. This file is only
+// for deploying from a terminal with `npx wrangler deploy`.
+//
+// After creating the KV namespace, replace the placeholder id below with the
+// real one (`npx wrangler kv namespace list`), and set the secrets:
+//   npx wrangler secret put TOKEN_SECRET
+//   npx wrangler secret put PASSWORD_PEPPER
+name = "zorox-sync"
+main = "worker.js"
+compatibility_date = "2026-11-11"
+
+[[kv_namespaces]]
+binding = "ZOROX_SYNC"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"

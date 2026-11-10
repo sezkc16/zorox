@@ -11,6 +11,7 @@ import 'package:vlc_player/vlc_player.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/models/torrent_status.dart';
 import '../../../skip/data/skip_service.dart';
+import '../../../settings/presentation/player_settings_provider.dart';
 import '../../domain/live_window.dart';
 import '../../domain/skip_segments.dart';
 import '../../domain/volume_routing.dart';
@@ -33,7 +34,6 @@ import 'transient_overlay.dart';
 import 'vlc_progress_bar.dart';
 import '../components/torrent_info_widget.dart';
 import 'panel/player_panel.dart' show PlayerPanelTab;
-import '../../../settings/presentation/player_settings_provider.dart';
 
 /// Chrome for the VLC engine.
 ///
@@ -593,6 +593,11 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
   @override
   void didUpdateWidget(VlcPlayerControls oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // A new episode brings new segments: the auto-skip guard belongs to the
+    // old episode's bands, so it must not carry over.
+    if (!identical(oldWidget.skipSegments, widget.skipSegments)) {
+      _autoSkippedSegment = null;
+    }
     if (oldWidget.chrome == widget.chrome) return;
     // The screen swapped or withdrew its controller mid-life. Follow the new
     // one, and if it withdrew, fall back to a private one so nothing here ever
@@ -630,10 +635,72 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
       _pauseRead = Timer(const Duration(milliseconds: 300), _readSystemVolume);
     }
     _wasPlaying = playing;
+    _maybeAutoSkip();
   }
+
+  /// Auto Skip (v2.9.4): skips the opening and the ending automatically,
+  /// like anime/dramas — no tap needed.
+  ///
+  /// Runs on every controller value change (position ticks fire it), so it is
+  /// the place the manual chip cannot be: the chip only acts on a press.
+  /// Intro and recap seek to the band's end; an outro with an episode behind
+  /// it does the chip's exact advance (seek to the outro advance point, then
+  /// hand over to [onSkipOutro]) so the next episode starts by itself.
+  /// An outro with no episode behind it just seeks to the band's end and the
+  /// episode finishes on its own.
+  ///
+  /// The guard [_autoSkippedSegment] is why a seek in flight does not
+  /// re-fire: ticks still land inside the band for a frame or two after
+  /// `seekTo`, and without it the same segment would jump again. It clears
+  /// the moment the position is outside every segment again.
+  void _maybeAutoSkip() {
+    final autoSkip =
+        ref.read(playerSettingsProvider).asData?.value.autoSkip ?? true;
+    if (!autoSkip) return;
+    if (!widget.controller.value.isPlaying) return;
+    final segments = widget.skipSegments;
+    if (segments.isEmpty) return;
+    final segment = segmentAt(segments, widget.controller.value.position);
+    if (segment == null) {
+      _autoSkippedSegment = null;
+      return;
+    }
+    if (segment.type != SkipType.intro &&
+        segment.type != SkipType.recap &&
+        segment.type != SkipType.outro) {
+      return;
+    }
+    if (_sameSegment(segment, _autoSkippedSegment)) return;
+    final bool advances =
+        segment.type == SkipType.outro && widget.onSkipOutro != null;
+    // Mirror the chip: an outro advance on an unseekable source cannot land.
+    if (advances && _advanceWithheld(segment, widget.controller.value)) {
+      return;
+    }
+    _autoSkippedSegment = segment;
+    final target = advances
+        ? _outroAdvancePoint(segment)
+        : Duration(milliseconds: (segment.endTime * 1000).round());
+    widget.controller.seekTo(target);
+    _rebaseSeekChain(target);
+    if (advances) widget.onSkipOutro!.call();
+  }
+
+  /// Same band (start + end + type), for the auto-skip guard.
+  bool _sameSegment(SkipSegment a, SkipSegment? b) =>
+      b != null &&
+      a.startTime == b.startTime &&
+      a.endTime == b.endTime &&
+      a.type == b.type;
 
   bool _wasPlaying = false;
   Timer? _pauseRead;
+
+  /// The segment Auto Skip just jumped over, so the position ticks that land
+  /// while the seek is still in flight do not fire it a second time.
+  /// Cleared the moment the position is outside every segment again, and when
+  /// a new episode's segments arrive.
+  SkipSegment? _autoSkippedSegment;
 
   void _readSystemVolume() {
     final system = _system;

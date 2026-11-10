@@ -1,3 +1,4 @@
+import CoreMedia
 import Flutter
 import MobileVLCKit
 import UIKit
@@ -272,6 +273,11 @@ public class VlcPlayerPlugin: NSObject, FlutterPlugin {
       result(player.getMediaInfo())
     case "getMediaStats":
       result(player.getMediaStats())
+    case "startPictureInPicture":
+      result(player.startPictureInPicture())
+    case "stopPictureInPicture":
+      player.stopPictureInPicture()
+      result(nil)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -440,6 +446,10 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
   private var trackRevision = 0
   private var lastTrackFingerprint: UInt64?
   private var interruption = "none"
+  /// The iOS picture-in-picture window, when one is up or starting. Nil
+  /// otherwise, and on a view-backed player, which has no texture to feed
+  /// from. Owned here so dispose() can close it with the player.
+  private var pictureInPicture: VlcPictureInPictureController?
   private var holdsAudioSession = false
   private(set) var isDisposed = false
   /// Whether this player has been given a source: the next one gets a fresh
@@ -593,6 +603,74 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     mediaPlayer.stop()
     relinquishAudioSession()
     sendSnapshot(stateOverride: "stopped")
+  }
+
+  /// Opens the iOS picture-in-picture window, fed from this player's texture.
+  ///
+  /// False when the device cannot do PiP (no support, below iOS 15, or a
+  /// view-backed player, which has no texture to feed from), or when there is
+  /// no picture yet. True means the request went out; the result — started,
+  /// or failed to start — arrives on the event channel as a
+  /// `pictureInPicture` event (see [sendPictureInPictureEvent]).
+  func startPictureInPicture() -> Bool {
+    guard !isDisposed else {
+      return false
+    }
+    if let pictureInPicture, pictureInPicture.isActive {
+      return true
+    }
+    let pip = VlcPictureInPictureController(player: self) { [weak self] inPip in
+      self?.sendPictureInPictureEvent(inPip)
+    }
+    guard pip.start() else {
+      return false
+    }
+    pictureInPicture = pip
+    return true
+  }
+
+  /// Closes the iOS picture-in-picture window, if one is up. The
+  /// `pictureInPicture` event still arrives, from the stop completing.
+  func stopPictureInPicture() {
+    pictureInPicture?.stop()
+  }
+
+  /// Sends the iOS picture-in-picture state to Dart, through the event channel
+  /// the snapshots already use.
+  ///
+  /// A minimal event, not a snapshot: Dart reads the `pictureInPicture` key
+  /// off it directly, so a PiP-only event never disturbs the published value.
+  func sendPictureInPictureEvent(_ inPip: Bool) {
+    guard !isDisposed else {
+      return
+    }
+    eventHandler.send(["pictureInPicture": inPip])
+  }
+
+  /// Whether the transport is playing, for the PiP window's play/pause.
+  var pipIsPlaying: Bool {
+    return mediaPlayer.isPlaying
+  }
+
+  /// Seeks by [seconds], clamped to the media, for the PiP window's step.
+  func pipSkip(by seconds: Double) {
+    let position = Double(mediaPlayer.time.intValue) / 1000.0 + seconds
+    let duration = Double(mediaPlayer.media?.length.intValue ?? 0) / 1000.0
+    let clamped = duration > 0
+      ? min(max(position, 0), duration)
+      : max(position, 0)
+    seekTo(milliseconds: Int(clamped * 1000))
+  }
+
+  /// The scrub range the PiP window draws, or invalid when the media has no
+  /// length to draw from.
+  func pipTimeRange() -> CMTimeRange {
+    guard let length = mediaPlayer.media?.length, length.intValue > 0 else {
+      return CMTimeRange(start: .invalid, duration: .invalid)
+    }
+    return CMTimeRange(
+      start: .zero,
+      duration: CMTime(value: Int64(length.intValue), timescale: 1000))
   }
 
   func seekTo(milliseconds: Int) {
@@ -907,6 +985,10 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
       return
     }
     isDisposed = true
+    // First: a PiP window outlives its player unless it is told to close,
+    // and its feed reads the texture this dispose detaches below.
+    pictureInPicture?.dispose()
+    pictureInPicture = nil
     // libVLC stops calling in before anything else goes.
     events?.detach()
     events = nil

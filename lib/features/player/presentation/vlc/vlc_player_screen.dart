@@ -1185,6 +1185,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// Both callbacks arrive from the platform thread, hence the
   /// mounted/disposed guard before any setState.
   void _attachPip() {
+    // iOS reports its PiP window through the controller, not the activity:
+    // opened by the request in [_enterPip], closed by the window's own
+    // button, or never opened at all when the device refuses.
+    _controller.isPictureInPicture.addListener(_onPictureInPicture);
     _platform.attachPipListener(
       onAction: (action) => switch (action) {
         PipAction.play => unawaited(_controller.play()),
@@ -3584,9 +3588,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     });
   }
 
-  /// Picture-in-picture is an Android activity mode; there is no equivalent on
-  /// the other platforms this ships to, and it is meaningless on a television.
-  bool get _pipAvailable => Platform.isAndroid && _form != PlayerFormFactor.tv;
+  /// Picture-in-picture is an Android activity mode and, on iOS, a
+  /// sample-buffer window fed from the VLC texture; it is meaningless on a
+  /// television either way.
+  bool get _pipAvailable =>
+      (Platform.isAndroid || Platform.isIOS) && _form != PlayerFormFactor.tv;
 
   /// Only a desktop window can change size; mobile and TV are already full
   /// screen, so the affordance is absent rather than inert.
@@ -3645,18 +3651,43 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // reach one. Cleared on the way in rather than on the way out, because the
     // window is drawn from this frame.
     _clearLock();
-    final entered = await _platform.enterPip(
-      _controller.value.isPlaying,
-      // Shapes the window to the film. Read at the moment of the request
-      // rather than remembered, because a failover or a next-episode start
-      // can have changed it since the last size event.
-      videoSize: _controller.value.videoSize,
-    );
+    final bool entered;
+    if (Platform.isIOS) {
+      // iOS has no activity to enter: the VLC plugin opens the PiP window
+      // itself, fed from the texture. False — not an error — when the device
+      // cannot do PiP, and then no `pictureInPicture` event ever arrives.
+      // The window opening and closing is reported back through
+      // [_onPictureInPicture].
+      entered = await _controller
+          .startPictureInPicture()
+          .catchError((Object _) => false);
+    } else {
+      entered = await _platform.enterPip(
+        _controller.value.isPlaying,
+        // Shapes the window to the film. Read at the moment of the request
+        // rather than remembered, because a failover or a next-episode start
+        // can have changed it since the last size event.
+        videoSize: _controller.value.videoSize,
+      );
+    }
     // Android answers false - not an error - when the user has PiP disabled
     // for the app, and then never sends onPictureInPictureModeChanged. Without
     // this the optimism above is permanent and the chrome never comes back.
     if (entered || _disposed || !mounted || !_inPip) return;
     setState(() => _inPip = false);
+  }
+
+  /// The iOS PiP window opened or closed, reported through the controller.
+  ///
+  /// The same guard as the Android callback: the window can open without
+  /// [_enterPip] — the viewer swiped home — or close itself, from its own
+  /// button or by tapping it to come back. Either way a locked PiP window
+  /// has no chip in it, so the lock clears on the way in.
+  void _onPictureInPicture() {
+    final inPip = _controller.isPictureInPicture.value;
+    if (!mounted || _disposed || inPip == _inPip) return;
+    if (inPip) _clearLock();
+    setState(() => _inPip = inPip);
   }
 
   /// Opens the side panel, on whichever of its tabs the caller asked for.
@@ -5313,6 +5344,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _controller.pendingSeekTarget.removeListener(_qoeSeekChanged);
     _controller.pendingSeekTarget.removeListener(_onSeekSettled);
     _controller.pendingSeekTarget.removeListener(_followSeekTarget);
+    _controller.isPictureInPicture.removeListener(_onPictureInPicture);
     _controller.removeListener(_onPlaybackValue);
     _controller.dispose();
     // The torrent server seeds in the background; nothing else stops it.

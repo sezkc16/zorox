@@ -223,6 +223,29 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   /// stopped when one attaches, instead of starting on its own.
   Future<void> stop();
 
+  /// Starts iOS picture-in-picture for this player, if the device supports
+  /// it.
+  ///
+  /// True means the request went out; the window opening — or failing to —
+  /// is reported through [isPictureInPicture]. False, not an error, when
+  /// the device cannot do PiP, when there is no picture yet, or when no
+  /// native player is attached. Android has no equivalent here: its PiP is
+  /// an activity mode the host screen enters itself, so this stays false
+  /// there.
+  Future<bool> startPictureInPicture();
+
+  /// Stops iOS picture-in-picture, if one is running. The window closing is
+  /// reported through [isPictureInPicture].
+  Future<void> stopPictureInPicture();
+
+  /// Whether this player is currently showing in picture-in-picture.
+  ///
+  /// iOS only, reported by the native PiP window as it opens and closes —
+  /// by the request above, by the window's own close button, or by the
+  /// viewer tapping the window to come back. Android's PiP is an activity
+  /// mode the host screen tracks itself, so this stays false there.
+  ValueListenable<bool> get isPictureInPicture;
+
   /// Seeks to [position].
   ///
   /// [position] must be non-negative. [pendingSeekTarget] moves to it at once.
@@ -620,6 +643,13 @@ class _VlcPlayerController extends VlcPlayerController
   final ValueNotifier<Duration?> _pendingSeekTarget = ValueNotifier<Duration?>(
     null,
   );
+
+  /// Whether the iOS picture-in-picture window is up. See
+  /// [VlcPlayerController.isPictureInPicture].
+  final ValueNotifier<bool> _pictureInPicture = ValueNotifier<bool>(false);
+
+  @override
+  ValueListenable<bool> get isPictureInPicture => _pictureInPicture;
 
   /// The published position the pending seek set out from - in a chain of
   /// steps, the previous step's target - so an earlier step landing late is
@@ -1433,6 +1463,17 @@ class _VlcPlayerController extends VlcPlayerController
     return _invoke('stop');
   }
 
+  @override
+  Future<bool> startPictureInPicture() async {
+    final started = await _invokeFor<bool>('startPictureInPicture');
+    return started ?? false;
+  }
+
+  @override
+  Future<void> stopPictureInPicture() {
+    return _invoke('stopPictureInPicture');
+  }
+
   /// Drops every claim that would otherwise start playback on its own.
   ///
   /// Asking for silence answers both questions at once: a viewer who pauses
@@ -2129,6 +2170,18 @@ class _VlcPlayerController extends VlcPlayerController
       if (sequence < _lastSequence) return;
       _lastSequence = sequence;
     }
+    // A PiP-only event carries no snapshot: it says only whether the iOS
+    // picture-in-picture window opened or closed. Running it through
+    // [VlcPlayerValue.fromEvent] would read its absent keys as a cleared
+    // hold and a cleared error, so it owns its notifier instead — and a
+    // snapshot that happens to carry the key updates the notifier on its
+    // way through.
+    if (event is Map && event['pictureInPicture'] is bool) {
+      _pictureInPicture.value = event['pictureInPicture'] as bool;
+      if (!event.containsKey('state')) {
+        return;
+      }
+    }
     final previousValue = _pendingThrottledValue ?? value;
     final nextValue = _observeStall(
       _placeInLiveWindow(
@@ -2421,6 +2474,7 @@ class _VlcPlayerController extends VlcPlayerController
     _clearPendingSeek();
     _dropMergedSeek();
     _pendingSeekTarget.dispose();
+    _pictureInPicture.dispose();
     _playbackClock.dispose();
     if (viewId != null) {
       unawaited(_disposeNativeView(viewId));
