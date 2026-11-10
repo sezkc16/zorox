@@ -13,7 +13,7 @@ pre-installed.
 | iOS bundle ID | `ios/Runner.xcodeproj/project.pbxproj` (`PRODUCT_BUNDLE_IDENTIFIER`) | `com.toji.zorox` |
 | Android app ID | `android/app/build.gradle.kts` (`namespace`, `applicationId`), Kotlin package `android/app/src/main/kotlin/com/toji/zorox/` | `com.toji.zorox` |
 | App icon | `ios/Runner/Assets.xcassets/AppIcon.appiconset/` (21 PNGs), `android/app/src/main/res/mipmap-*/ic_launcher*.png`, `assets/images/ic_launcher_foreground.png` | Gold "Z" on black (master: `zorox_icon_1024.png`) |
-| Default repo | `lib/core/cloudstream/cloudstream_repository.dart` (`_defaultRepositoryUrl` + `_seedDefaultRepository()`) | `https://raw.githubusercontent.com/sezkc16/katdrama/builds/plugins.json` |
+| Default repos | `lib/core/cloudstream/cloudstream_repository.dart` (`_defaultRepositoryUrls` + `_seedDefaultRepository()`) | SkyStream = `https://raw.githubusercontent.com/sezkc16/TojiX/main/repo.json` (owner's repo; old `sezkc16/katdrama/builds/plugins.json` still works as its alias) and CloudStream = `https://raw.githubusercontent.com/recloudstream/extensions/master/repo.json` (official). Both are seeded on first launch, respect removal, and show on the Plugins screen as the two options "SkyStream" / "CloudStream" (labels from `CloudStreamRepository.displayNameFor`, computed from the URL — a manifest's own name is what a refresh stores). |
 
 The original developer's Apple Team ID was removed from the Xcode project;
 the build is unsigned (see below).

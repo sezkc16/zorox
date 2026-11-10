@@ -50,12 +50,13 @@ class CustomBottomNavBar extends StatelessWidget {
         label: localizations.library,
       ),
       _BottomNavDestination(
-        icon: Icons.settings_outlined,
-        selectedIcon: Icons.settings,
-        // Preview tab name (no l10n key for it): the user approved
-        // "Detail". The gear icon is the preview's own icon for this
-        // tab; it opens the most recently watched item's detail page.
-        label: 'Detail',
+        icon: Icons.explore_outlined,
+        selectedIcon: Icons.explore,
+        // Preview tab name (no l10n key for it): the user asked for a
+        // "Browse" tab here in place of the Detail tab (v4) — the world's
+        // movies, from TMDB when a key is set, the active provider's home
+        // page otherwise.
+        label: 'Browse',
       ),
     ];
 

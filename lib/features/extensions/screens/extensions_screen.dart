@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/utils/layout_constants.dart';
+import '../../../core/cloudstream/cloudstream_repository.dart';
 import '../../../core/extensions/models/extension_plugin.dart';
 import '../../../core/extensions/models/extension_repository.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../providers/extensions_controller.dart';
+import 'cloudstream_plugin_section.dart';
 import 'plugin_settings_dialog.dart';
 import '../../../shared/widgets/cards_wrapper.dart';
 import '../../../shared/widgets/loading_indicator.dart';
@@ -305,6 +307,12 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
     ExtensionsState state,
   ) {
     final l10n = AppLocalizations.of(context)!;
+    // Installed CloudStream plugins live beside SkyStream's own: without
+    // them here, a plugin installed from the Repositories tab would not
+    // show up as installed anywhere on this screen.
+    final csInstalled = ref.watch(
+      cloudStreamRepositoryProvider.select((s) => s.installed),
+    );
     if (state is ExtensionsLoading && state.installedPlugins.isEmpty) {
       return const Center(child: AppLoadingIndicator());
     }
@@ -338,7 +346,7 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
         .toList();
     final hasInstalledOnly = installedOnlyPlugins.isNotEmpty;
 
-    if (state.installedPlugins.isEmpty) {
+    if (state.installedPlugins.isEmpty && csInstalled.isEmpty) {
       return ListView(
         padding: const EdgeInsets.all(LayoutConstants.spacingLg),
         children: [
@@ -400,6 +408,7 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
             installedOnlyPlugins,
             hasRepos: state.repositories.isNotEmpty,
           ),
+        if (csInstalled.isNotEmpty) const CloudStreamInstalledSection(),
       ],
     );
   }
@@ -410,10 +419,23 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
     ExtensionsState state,
   ) {
     final l10n = AppLocalizations.of(context)!;
-    if (state is ExtensionsLoading && state.repositories.isEmpty) {
+    // CloudStream's repositories live in their own store, and this screen
+    // only read SkyStream's — so a CloudStream repository seeded at launch
+    // never showed up here and the tab looked empty. Both are listed now.
+    final csRepositories = ref.watch(
+      cloudStreamRepositoryProvider.select((s) => s.repositories),
+    );
+    final csLoading = ref.watch(
+      cloudStreamRepositoryProvider.select((s) => s.isLoading),
+    );
+    if (state is ExtensionsLoading &&
+        state.repositories.isEmpty &&
+        csRepositories.isEmpty &&
+        csLoading) {
       return const Center(child: AppLoadingIndicator());
     }
-    final isEmpty = state.repositories.isEmpty;
+    final isEmpty =
+        state.repositories.isEmpty && csRepositories.isEmpty;
 
     if (isEmpty) {
       return ListView(
@@ -461,22 +483,26 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
       );
     }
 
-    return ListView.builder(
+    return ListView(
       padding: EdgeInsets.only(
         bottom: LayoutConstants.shellBottomContentPadding(context),
         top: LayoutConstants.spacingMd,
       ),
       addAutomaticKeepAlives: false,
-      itemCount: state.repositories.length + 1,
-      itemBuilder: (context, index) {
-        if (index < state.repositories.length) {
-          final repo = state.repositories[index];
-          final plugins = state.availablePlugins[repo.url] ?? [];
-          return _buildRepositoryCard(context, ref, state, repo, plugins, l10n);
-        }
-
+      children: [
+        for (final repo in state.repositories)
+          _buildRepositoryCard(
+            context,
+            ref,
+            state,
+            repo,
+            state.availablePlugins[repo.url] ?? [],
+            l10n,
+          ),
+        if (csRepositories.isNotEmpty)
+          const CloudStreamRepositoriesSection(),
         // The extra item: an add-repository row pinned below the list.
-        return Padding(
+        Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: LayoutConstants.spacingMd,
             vertical: LayoutConstants.spacingSm,
@@ -506,8 +532,8 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
               ),
             ),
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 

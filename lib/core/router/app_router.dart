@@ -18,12 +18,13 @@ import '../../features/settings/presentation/player_settings_screen.dart';
 import '../../features/settings/presentation/account_settings_screen.dart';
 import '../../features/settings/presentation/developer_options_screen.dart';
 import '../../features/details/presentation/details_screen.dart';
-import '../../features/details/presentation/detail_tab_screen.dart';
+import '../../features/browse/presentation/browse_screen.dart';
 import '../../features/details/presentation/tmdb_movie_details_screen.dart';
 import '../../features/explore/presentation/view_all_screen.dart';
 import '../domain/entity/multimedia_item.dart';
 import 'package:skystream/shared/widgets/app_scaffold.dart';
 import '../../core/storage/settings_repository.dart';
+import 'route_transitions.dart';
 import 'package:talker_flutter/talker_flutter.dart';
 import 'package:flutter/foundation.dart';
 import '../logger/app_logger.dart';
@@ -41,13 +42,15 @@ part 'app_router.g.dart';
       routes: [TypedGoRoute<SearchRoute>(path: '/search')],
     ),
     // ZoroX (approved design preview): the bottom nav is EXACTLY
-    // Home / Search / Plugins / Library / Detail, as the user asked
-    // ("neeche home search plugin library detail sab esa hi").
+    // Home / Search / Plugins / Library / Browse, as the user asked
+    // ("neeche home search plugin library detail sab esa hi" in v3, then
+    // "ye section hatake browse dalo" for v4 — Detail out, Browse in).
     // Plugins = the Extensions screen (TojiX repo + providers).
-    // Detail = the detail page of the most recently watched item.
-    // Explore is no longer a tab. Settings stays as a 6th branch —
-    // reachable from the Home AppBar gear, not from the tab bar —
-    // so its sub-routes (player / accounts / nuvio / cloudstream /
+    // Browse = the world's movies: the Explore/discover page when a TMDB
+    // key is set, the active provider's home page otherwise — so the tab
+    // is never an empty screen. Explore is no longer a tab. Settings stays
+    // as a 6th branch — reachable from the Home AppBar gear, not from the
+    // tab bar — so its sub-routes (player / accounts / nuvio / cloudstream /
     // stremio / developer) keep working unchanged.
     TypedStatefulShellBranch<PluginsBranchData>(
       routes: [TypedGoRoute<ExtensionsRoute>(path: '/extensions')],
@@ -55,8 +58,8 @@ part 'app_router.g.dart';
     TypedStatefulShellBranch<LibraryBranchData>(
       routes: [TypedGoRoute<LibraryRoute>(path: '/library')],
     ),
-    TypedStatefulShellBranch<DetailBranchData>(
-      routes: [TypedGoRoute<DetailTabRoute>(path: '/detail')],
+    TypedStatefulShellBranch<BrowseBranchData>(
+      routes: [TypedGoRoute<BrowseRoute>(path: '/browse')],
     ),
     TypedStatefulShellBranch<SettingsBranchData>(
       routes: [
@@ -113,15 +116,15 @@ class PluginsBranchData extends StatefulShellBranchData {
   const PluginsBranchData();
 }
 
-class DetailBranchData extends StatefulShellBranchData {
-  const DetailBranchData();
+class BrowseBranchData extends StatefulShellBranchData {
+  const BrowseBranchData();
 }
 
-class DetailTabRoute extends GoRouteData with $DetailTabRoute {
-  const DetailTabRoute();
+class BrowseRoute extends GoRouteData with $BrowseRoute {
+  const BrowseRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) =>
-      const DetailTabScreen();
+      const BrowseScreen();
 }
 
 class LibraryBranchData extends StatefulShellBranchData {
@@ -157,6 +160,12 @@ class PlayerSettingsRoute extends GoRouteData with $PlayerSettingsRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) =>
       const PlayerSettingsScreen();
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 class AccountSettingsRoute extends GoRouteData with $AccountSettingsRoute {
@@ -164,6 +173,12 @@ class AccountSettingsRoute extends GoRouteData with $AccountSettingsRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) =>
       const AccountSettingsScreen();
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 class ExtensionsRoute extends GoRouteData with $ExtensionsRoute {
@@ -178,6 +193,12 @@ class NuvioPluginsRoute extends GoRouteData with $NuvioPluginsRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) =>
       const NuvioPluginsScreen();
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 class CloudStreamRoute extends GoRouteData with $CloudStreamRoute {
@@ -185,6 +206,12 @@ class CloudStreamRoute extends GoRouteData with $CloudStreamRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) =>
       const CloudStreamScreen();
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 class AddonsRoute extends GoRouteData with $AddonsRoute {
@@ -194,6 +221,12 @@ class AddonsRoute extends GoRouteData with $AddonsRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) =>
       AddonsScreen(initialTab: initialTab ?? 0);
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 class DeveloperOptionsRoute extends GoRouteData with $DeveloperOptionsRoute {
@@ -201,6 +234,12 @@ class DeveloperOptionsRoute extends GoRouteData with $DeveloperOptionsRoute {
   @override
   Widget build(BuildContext context, GoRouterState state) =>
       const DeveloperOptionsScreen();
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 @TypedGoRoute<AppLogsRoute>(path: '/logs')
@@ -217,6 +256,12 @@ class AppLogsRoute extends GoRouteData with $AppLogsRoute {
       ),
     );
   }
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 // --- Typed Extras ---
@@ -378,6 +423,12 @@ class DetailsRoute extends GoRouteData with $DetailsRoute {
   Widget build(BuildContext context, GoRouterState state) {
     return DetailsScreen(item: $extra.item, autoPlay: $extra.autoPlay);
   }
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 @TypedGoRoute<TmdbDetailsRoute>(path: '/tmdb-details')
@@ -405,6 +456,12 @@ class TmdbDetailsRoute extends GoRouteData with $TmdbDetailsRoute {
       source: source,
     );
   }
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 @TypedGoRoute<ViewAllRoute>(path: '/view-all')
@@ -421,6 +478,12 @@ class ViewAllRoute extends GoRouteData with $ViewAllRoute {
       onTap: $extra.onTap,
     );
   }
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 /// Location of [PlayerRoute], as a value other layers can compare against.
@@ -466,6 +529,12 @@ class PlayerRoute extends GoRouteData with $PlayerRoute {
       preloadedStreams: $extra.preloadedStreams,
     );
   }
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 @TypedGoRoute<AddonDetailRoute>(path: '/addon-detail')
@@ -479,6 +548,12 @@ class AddonDetailRoute extends GoRouteData with $AddonDetailRoute {
   Widget build(BuildContext context, GoRouterState state) {
     return AddonDetailScreen(type: type, id: id, addonUrl: addonUrl);
   }
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 @TypedGoRoute<AddonCatalogRoute>(path: '/addon-catalog')
@@ -503,6 +578,12 @@ class AddonCatalogRoute extends GoRouteData with $AddonCatalogRoute {
       title: title,
     );
   }
+
+  // Same smooth slide + fade as every other pushed page (see
+  // route_transitions.dart).
+  @override
+  Page<void> buildPage(BuildContext context, GoRouterState state) =>
+      smoothPage(key: state.pageKey, child: build(context, state));
 }
 
 // --- GoRouter Definition ---
@@ -512,13 +593,14 @@ final rootNavigatorKey = GlobalKey<NavigatorState>();
 /// Branch roots the shell can start on. `/stream` no longer exists, so a
 /// preference saved by an older build has to be migrated instead of handing
 /// GoRouter an unknown initial location. Same for `/explore` (the Explore
-/// tab was replaced by Plugins in ZoroX v3).
+/// tab was replaced by Plugins in ZoroX v3) and `/detail` (the Detail tab
+/// was replaced by Browse in ZoroX v4).
 const List<String> kShellBranchRoutes = [
   '/home',
   '/search',
   '/extensions',
   '/library',
-  '/detail',
+  '/browse',
   '/settings',
 ];
 

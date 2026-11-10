@@ -40,30 +40,31 @@ spec is about colour, layout and shape, not the typeface.
 - Surface: `rgba(18,18,20,.88)` glass (blur 14) with `1px #2E2E33` border and
   `0 12px 30px rgba(0,0,0,.5)` shadow.
 - 5 tabs with icon + label (10px, bold): Home / Search / Plugins / Library /
-  Detail — EXACTLY as the preview shows (the user's own words, 2026-11-11:
-  "neeche home search plugin library detail sab esa hi"). The app's shell
+  Browse — EXACTLY as the preview shows (the user's own words, 2026-11-11:
+  "neeche home search plugin library detail sab esa hi" — v3), then in
+  v4 the user asked for the Detail tab to become Browse ("ye section
+  hatake browse dalo jisme world ki sab movies dikhr"). The app's shell
   branches were re-mapped to match: Home `/home`, Search `/search`, Plugins
   = the Extensions screen `/extensions` (TojiX repo + providers), Library
-  `/library`, Detail `/detail`. Explore is NO LONGER a tab (removed from
+  `/library`, Browse `/browse`. Explore is NO LONGER a tab (removed from
   the shell; nothing else referenced it). Settings is a 6th shell branch
   (`/settings`, index 5) — reachable from the gear button in the Home
   AppBar (right of the provider pill), NOT from the tab bar, so its
   sub-routes (player / accounts / nuvio / cloudstream / stremio /
   developer) keep working unchanged. When Settings is open no tab is
   highlighted (it is not one of the 5).
-- The "Detail" tab shows the detail page of the MOST RECENTLY watched
-  item (watch history, most recent by timestamp) — the same screen a
-  poster tap opens — with the floating pill nav still visible, exactly
-  as the preview shows the Detail screen above the tab bar. If nothing
-  has been watched yet it shows an empty state ("Abhi kuch dekha nahi")
-  with a gold "Home kholo" button. Note: the back arrow inside the
-  detail page is a no-op on this tab (it is the root of its branch, so
-  there is nothing to pop); the pill nav is the way out.
-- Labels "Plugins" and "Detail" are hardcoded English strings in the
+- The "Browse" tab shows the world's movies, Trending first: the full
+  Explore/discover page (TMDB trending / popular / top-rated) when a TMDB
+  API key is set — the page header then still reads "Explore", its own
+  title — and the active provider's home page when no key is set, the
+  Trending section as a named hero carousel (with its own scrollable
+  Trending row below it) followed by the provider's other lists, so the
+  tab is never an empty screen. Tapping a poster opens that title's
+  detail page, exactly as a poster tap does everywhere else.
+- Labels "Plugins" and "Browse" are hardcoded English strings in the
   nav/sidebar (no l10n key exists for them); Home / Search / Library
   keep using the localized strings. Tab icons: home, search, extension
-  (puzzle), video_library, settings-gear — the gear is the preview's
-  own icon for the Detail tab.
+  (puzzle), video_library, explore (compass).
 - Active tab: icon + label in gold `#D4AF37`, icon wrapped in a gold-soft pill
   (`rgba(212,175,55,.16)`, radius 12, padding `3px 10px`).
 - Inactive tab: icon + label in `#9D9A92`.

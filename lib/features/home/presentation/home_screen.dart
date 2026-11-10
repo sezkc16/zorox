@@ -395,7 +395,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Namaste, Suresh',
+                          'Hello, Suresh',
                           style: TextStyle(
                             color: Theme.of(
                               context,
@@ -405,7 +405,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Aaj kya dekhna hai?',
+                          'What do you want to watch today?',
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(
                                 fontWeight: FontWeight.w700,
@@ -558,8 +558,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   /// "Select a provider" screen — greeting, the provider card, and a chip
   /// for every installed provider, so the home is never empty.
   ///
-  /// The two labels are the preview's own Hinglish ("Abhi wala provider",
-  /// "Badlo ›") — there is no l10n key for them and the mock the user
+  /// The two labels are the preview's own ("Current provider",
+  /// "Change ›") — there is no l10n key for them and the mock the user
   /// approved uses exactly these words.
   Widget _buildNoProviderState(
     BuildContext context,
@@ -581,7 +581,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         children: [
           // Greeting (preview).
           Text(
-            'Namaste, Suresh',
+            'Hello, Suresh',
             style: TextStyle(
               color: cs.onSurfaceVariant,
               fontWeight: FontWeight.w600,
@@ -589,14 +589,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ),
           const SizedBox(height: 2),
           Text(
-            'Aaj kya dekhna hai?',
+            'What do you want to watch today?',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
               fontWeight: FontWeight.w700,
               fontSize: 21,
             ),
           ),
           const SizedBox(height: 14),
-          // Provider card (preview): current provider + "Badlo".
+          // Provider card (preview): current provider + "Change".
           Consumer(
             builder: (context, ref, _) {
               final active = ref.watch(activeProviderProvider);
@@ -638,7 +638,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Abhi wala provider',
+                              'Current provider',
                               style: TextStyle(
                                 color: cs.onSurfaceVariant,
                                 fontSize: 11.5,
@@ -657,7 +657,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                         ),
                       ),
                       Text(
-                        'Badlo ›',
+                        'Change ›',
                         style: TextStyle(
                           color: cs.primary,
                           fontWeight: FontWeight.w800,

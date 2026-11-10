@@ -827,9 +827,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// texture platforms this is the value that does the work.
   late VlcVideoFit _fit;
 
-  /// Pinch-to-zoom scale on the video (ZoroX v3): two fingers scale the
-  /// picture 1.0–3.0 on top of [_fit], like MX Player / VLC. Reset to 1.0
-  /// whenever a new media opens (see [_openAttempt] and [_park]).
+  /// Pinch-to-zoom scale on the video (ZoroX v3; range widened to 0.5–3.0
+  /// in v4, so an inward pinch can also make the picture smaller than the
+  /// screen fit): two fingers scale the picture on top of [_fit], like
+  /// MX Player / VLC. Reset to 1.0 whenever a new media opens (see
+  /// [_openAttempt] and [_park]).
   double _videoScale = 1.0;
 
   /// The [_videoScale] at the start of the current pinch, so a new gesture
@@ -1075,11 +1077,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           // media carries its own interval, and its read-ahead from the
           // buffer rule: see playbackMediaOptions.
           networkCaching: kVodCachingMs,
-          // Instance-level read-ahead (64 MiB): the prefetch ring libVLC
-          // reads ahead of the demuxer, so a double-tap seek has data
-          // waiting instead of re-fetching. A per-media :prefetch-buffer-size
-          // from the buffer plan still overrides this.
-          prefetchBufferKiB: 65536,
+          // Instance-level read-ahead (128 MiB, was 64 MiB in v3): the
+          // prefetch ring libVLC reads ahead of the demuxer, so a
+          // double-tap seek has data waiting instead of re-fetching.
+          // 1080p at ~8 Mbit/s is about two minutes of video in 128 MiB,
+          // 4K at ~25 Mbit/s about forty seconds — comfortably more than
+          // a ±10 s step. A per-media :prefetch-buffer-size from the
+          // buffer plan still overrides this. Costs 128 MiB resident.
+          prefetchBufferKiB: 131072,
           userAgent: kDefaultBrowserUserAgent,
           // HLS and DASH Auto follow the link: the highest rendition allowed
           // for three segments, then down as the buffer drains and up as it
@@ -5442,18 +5447,36 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
               offstage:
                   PlayerDiagnostics.suppressVideoSurface ||
                   _stage != _Stage.playing,
-              // Pinch-to-zoom (ZoroX v3): two fingers scale the picture on
-              // top of the fit. onScaleUpdate only claims a two-finger
-              // gesture, so single taps still reach the controls above.
+              // Pinch-to-zoom (ZoroX v3, range widened in v4): two fingers
+              // scale the picture on top of the fit — outwards zooms in,
+              // inwards zooms out, down to half size so the picture can
+              // be made smaller than the screen fit. onScaleUpdate only
+              // claims a two-finger gesture, so single taps still reach
+              // the controls above.
               child: GestureDetector(
                 onScaleStart: (_) => _scaleStart = _videoScale,
                 onScaleUpdate: (details) {
+                  // details.scale is the fingers' distance relative to
+                  // the gesture's start — under 1.0 while pinching in —
+                  // so this falls as well as rises: from 1.0 an inward
+                  // pinch shrinks the picture toward 0.5, from 2.0 it
+                  // comes back down through 1.0 toward 0.5.
                   // clamp() returns num; toDouble() keeps _videoScale a
                   // double — assigning num to it would not compile.
                   final double scale =
-                      (_scaleStart * details.scale).clamp(1.0, 3.0).toDouble();
+                      (_scaleStart * details.scale).clamp(0.5, 3.0).toDouble();
                   if (scale != _videoScale) {
                     setState(() => _videoScale = scale);
+                  }
+                },
+                // The scale sticks where the pinch left it — no snap back
+                // to 1.0 (unless the pinch ended there). Re-clamped here
+                // so the settled value is always inside the range.
+                onScaleEnd: (_) {
+                  final double settled =
+                      _videoScale.clamp(0.5, 3.0).toDouble();
+                  if (settled != _videoScale) {
+                    setState(() => _videoScale = settled);
                   }
                 },
                 child: Transform.scale(

@@ -16,7 +16,7 @@ BufferPlan plan(BufferMedia media) => bufferPlanFor(
 void main() {
   group('each media', () {
     test(
-      'starts on 1 s on demand, 1.5 s live, and never names live-caching',
+      'starts on 10 s on demand, 1.5 s live, and never names live-caching',
       () {
         final vod = playbackMediaOptions(
           live: false,
@@ -28,7 +28,7 @@ void main() {
         );
 
         expect(vod.where((o) => o.startsWith(':network-caching')), [
-          ':network-caching=1000',
+          ':network-caching=10000',
         ]);
         expect(live.where((o) => o.startsWith(':network-caching')), [
           ':network-caching=1500',

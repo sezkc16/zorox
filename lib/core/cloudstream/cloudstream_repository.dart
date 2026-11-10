@@ -229,24 +229,66 @@ class CloudStreamRepository extends _$CloudStreamRepository {
     unawaited(_seedDefaultRepository());
   }
 
-  /// ZoroX's default CloudStream repository (the owner's own repo).
-  /// Seeded once, on a launch where no repository is stored yet. Never
-  /// re-added after the user removed it (see [removedReposKey]), and retried
-  /// on the next launch if the network was down when first tried.
-  static const String _defaultRepositoryUrl =
+  /// ZoroX's default CloudStream repositories: the owner's own repo (TojiX)
+  /// and the official CloudStream providers repository. Each is seeded once,
+  /// on a launch where it is not stored yet. Never re-added after the user
+  /// removed it (see [removedReposKey]), and retried on the next launch if
+  /// the network was down when first tried.
+  ///
+  /// The owner's repo moved from `sezkc16/katdrama` to `sezkc16/TojiX`
+  /// (the old address still serves the same list); [_legacyTojiXRepositoryUrl]
+  /// is that old address, so an install that already has it does not get
+  /// TojiX added a second time, and one that removed it does not get it back.
+  static const String _tojiXRepositoryUrl =
+      'https://raw.githubusercontent.com/sezkc16/TojiX/main/repo.json';
+  static const String _cloudStreamRepositoryUrl =
+      'https://raw.githubusercontent.com/recloudstream/extensions/master/repo.json';
+  static const String _legacyTojiXRepositoryUrl =
       'https://raw.githubusercontent.com/sezkc16/katdrama/builds/plugins.json';
+
+  static const List<String> _defaultRepositoryUrls = [
+    _tojiXRepositoryUrl,
+    _cloudStreamRepositoryUrl,
+  ];
+
+  /// The two repositories ZoroX seeds, as the Plugins screen labels them:
+  /// the owner's repo (TojiX) is the "SkyStream" option — the repository for
+  /// this app — and the official CloudStream providers repository is the
+  /// "CloudStream" option. A manifest's own `name` ("TojiX Repo") is what a
+  /// refresh stores, so the label is computed from the URL at display time
+  /// rather than renamed in storage (a rename would be overwritten by the
+  /// next refresh). Anything else is shown under its manifest name.
+  static bool isSkyStreamRepository(String url) =>
+      url == _tojiXRepositoryUrl || url == _legacyTojiXRepositoryUrl;
+
+  static bool isCloudStreamRepository(String url) =>
+      url == _cloudStreamRepositoryUrl;
+
+  static String displayNameFor(CsRepository repo) {
+    if (isSkyStreamRepository(repo.url)) return 'SkyStream';
+    if (isCloudStreamRepository(repo.url)) return 'CloudStream';
+    return repo.name;
+  }
 
   Future<void> _seedDefaultRepository() async {
     await _loaded;
     if (!ref.mounted) return;
-    if (state.repositories.isNotEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     final removed = prefs.getStringList(removedReposKey) ?? const [];
-    if (removed.contains(_defaultRepositoryUrl)) return;
-    try {
-      await addRepository(_defaultRepositoryUrl);
-    } catch (error) {
-      talker.warning('[CloudStream] default repository did not load: $error');
+    final stored = {for (final repo in state.repositories) repo.url};
+    for (final url in _defaultRepositoryUrls) {
+      // TojiX: the old katdrama address is the same repository.
+      final aliases = url == _tojiXRepositoryUrl
+          ? {_tojiXRepositoryUrl, _legacyTojiXRepositoryUrl}
+          : {url};
+      if (aliases.any(stored.contains) || aliases.any(removed.contains)) {
+        continue;
+      }
+      try {
+        await addRepository(url);
+      } catch (error) {
+        talker.warning('[CloudStream] default repository did not load: $error');
+      }
     }
   }
 

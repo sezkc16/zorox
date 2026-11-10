@@ -31,7 +31,8 @@ class AppScaffold extends ConsumerStatefulWidget {
   ConsumerState<AppScaffold> createState() => _AppScaffoldState();
 }
 
-class _AppScaffoldState extends ConsumerState<AppScaffold> {
+class _AppScaffoldState extends ConsumerState<AppScaffold>
+    with TickerProviderStateMixin {
   // Owned here so the content-area LEFT key handler can focus them directly,
   // crossing the Branch Navigator's FocusScope boundary. Count comes from
   // [kSidebarDestinationCount] in app_sidebar.dart — single source of truth.
@@ -39,6 +40,49 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     kSidebarDestinationCount,
     (i) => FocusNode(debugLabel: 'sidebar_$i'),
   );
+
+  /// The branch-switch glide (ZoroX v4): the shell swaps branch Navigators
+  /// instantly, so a tab tap — or the Settings gear — snapped the new
+  /// branch in ("jhatak se"). The new branch instead fades in from a
+  /// little to the right over 300 ms, the same motion as a pushed page.
+  /// Starts complete, so the first frame just appears.
+  late final AnimationController _branchController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 300),
+    value: 1.0,
+  );
+  late final Animation<double> _branchFade = _branchController.drive(
+    CurveTween(curve: Curves.easeInOut),
+  );
+  late final Animation<Offset> _branchSlide = _branchController.drive(
+    Tween<Offset>(
+      begin: const Offset(0.04, 0),
+      end: Offset.zero,
+    ).chain(CurveTween(curve: Curves.easeInOut)),
+  );
+  late int _currentBranchIndex = widget.navigationShell.currentIndex;
+
+  @override
+  void didUpdateWidget(AppScaffold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.navigationShell.currentIndex != _currentBranchIndex) {
+      _currentBranchIndex = widget.navigationShell.currentIndex;
+      _branchController.forward(from: 0.0);
+    }
+  }
+
+  /// The shell content with the branch-switch glide. The shell itself is
+  /// never remounted — only its parent fades and slides — so each branch
+  /// keeps its scroll position and navigation stack.
+  Widget _branchTransition() {
+    return FadeTransition(
+      opacity: _branchFade,
+      child: SlideTransition(
+        position: _branchSlide,
+        child: widget.navigationShell,
+      ),
+    );
+  }
 
   /// How long a pointer may sit still on a television before the cursor goes.
   ///
@@ -73,6 +117,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
   @override
   void dispose() {
     _cursorIdleTimer?.cancel();
+    _branchController.dispose();
     for (final n in _sidebarNodes) {
       n.dispose();
     }
@@ -163,8 +208,9 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
 
   int _getRouteIndex(String route) {
     // ZoroX nav (approved design preview): Home 0 / Search 1 /
-    // Plugins 2 / Library 3 / Detail 4; Settings is branch 5.
-    // (Explore is no longer a branch, so there is no '/explore' case.)
+    // Plugins 2 / Library 3 / Browse 4; Settings is branch 5.
+    // (Explore is no longer a branch, so there is no '/explore' case;
+    // '/detail' was replaced by '/browse' in v4.)
     switch (route) {
       case '/home':
         return 0;
@@ -174,7 +220,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
         return 2;
       case '/library':
         return 3;
-      case '/detail':
+      case '/browse':
         return 4;
       case '/settings':
         return 5;
@@ -335,7 +381,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
                                   canRequestFocus: false,
                                   skipTraversal: true,
                                   onKeyEvent: _onContentKeyEvent,
-                                  child: widget.navigationShell,
+                                  child: _branchTransition(),
                                 ),
                               ),
                             ),
@@ -395,7 +441,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
                   bottom: mq.viewPadding.bottom + navBarTotalHeight,
                 ),
               ),
-              child: widget.navigationShell,
+              child: _branchTransition(),
             ),
             bottomNavigationBar: Padding(
               padding: EdgeInsets.only(

@@ -44,9 +44,12 @@ void main() {
   }
 
   test('the caching intervals stay inside a tolerable switch delay', () {
-    // 1 s on demand starts a file at 8 Mbit/s in 1.5 s instead of 2.6 s; a
-    // live feed, which can't read ahead, gets half a second more for jitter.
-    expect(kVodCachingMs, 1000);
+    // 10 s on demand keeps a ±10 s forward seek inside the window; a live
+    // feed, which can't read ahead, gets half a second more for jitter.
+    // Do not raise the on-demand value: a seek refills every stream at
+    // once, so a bigger interval makes the stall after a missed seek
+    // longer, not shorter (v4 investigated 30 s and rejected it).
+    expect(kVodCachingMs, 10000);
     expect(kLiveCachingMs, 1500);
   });
 
