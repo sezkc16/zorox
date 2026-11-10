@@ -10,7 +10,7 @@ class AppLocalizationsJa extends AppLocalizations {
   AppLocalizationsJa([String locale = 'ja']) : super(locale);
 
   @override
-  String get appTitle => 'SkyStream';
+  String get appTitle => 'ZoroX';
 
   @override
   String get languageName => '日本語';

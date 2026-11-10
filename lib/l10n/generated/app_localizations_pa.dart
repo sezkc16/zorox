@@ -10,7 +10,7 @@ class AppLocalizationsPa extends AppLocalizations {
   AppLocalizationsPa([String locale = 'pa']) : super(locale);
 
   @override
-  String get appTitle => 'SkyStream';
+  String get appTitle => 'ZoroX';
 
   @override
   String get languageName => 'ਪੰਜਾਬੀ';

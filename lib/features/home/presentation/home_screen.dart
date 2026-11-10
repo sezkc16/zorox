@@ -189,7 +189,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 .withValues(alpha: opacity),
           ),
         ),
-        title: Text(l10n.appTitle),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Gold Z logo (the app icon foreground, transparent background).
+            Image.asset(
+              'assets/images/ic_launcher_foreground.png',
+              width: 28,
+              height: 28,
+            ),
+            const SizedBox(width: 8),
+            Text(l10n.appTitle),
+          ],
+        ),
         actions: [
           // 1. Search Action Button
           Padding(

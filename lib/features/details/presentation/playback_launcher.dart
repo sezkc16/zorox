@@ -411,6 +411,9 @@ class PlaybackLauncher {
                       leading: const Icon(Icons.play_circle_outline),
                       title: Text(label),
                       subtitle: host.isNotEmpty ? Text(host) : null,
+                      // Gold quality badge (1080p / 720p / 4K ...) pulled
+                      // from the source label, as in the ZoroX v2 design.
+                      trailing: _QualityBadge.fromLabel(label),
                       onTap: () {
                         Navigator.pop(ctx);
                         _launchStream(
@@ -428,6 +431,48 @@ class PlaybackLauncher {
               const SizedBox(height: 8),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Gold quality badge for a source-picker row (ZoroX v2 design).
+///
+/// Pulls the quality token (2160p / 1080p / 720p / 480p / 360p / 4K) out of
+/// the source label — e.g. "ShuttleTV Vidlink 1080p" -> "1080p" — and shows
+/// it as a small gold pill. Returns null when the label carries no quality,
+/// so the row is unchanged for sources without one.
+class _QualityBadge extends StatelessWidget {
+  const _QualityBadge({required this.quality});
+
+  final String quality;
+
+  static Widget? fromLabel(String label) {
+    final match = RegExp(
+      r'(2160p|1080p|720p|480p|360p|4K)',
+      caseSensitive: false,
+    ).firstMatch(label);
+    if (match == null) return null;
+    return _QualityBadge(quality: match.group(0)!.toUpperCase());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: cs.primary.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: cs.primary.withValues(alpha: 0.4)),
+      ),
+      child: Text(
+        quality,
+        style: TextStyle(
+          color: cs.primary,
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
         ),
       ),
     );
