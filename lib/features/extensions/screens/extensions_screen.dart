@@ -9,7 +9,7 @@ import '../../../core/extensions/models/extension_plugin.dart';
 import '../../../core/extensions/models/extension_repository.dart';
 import '../../../core/extensions/extension_manager.dart';
 import '../providers/extensions_controller.dart';
-import 'cloudstream_plugin_section.dart';
+import '../widgets/cloudstream_plugin_section.dart';
 import 'plugin_settings_dialog.dart';
 import '../../../shared/widgets/cards_wrapper.dart';
 import '../../../shared/widgets/loading_indicator.dart';

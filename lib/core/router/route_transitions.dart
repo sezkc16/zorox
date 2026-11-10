@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 /// The app's page transition (ZoroX v4): every full-screen navigation
 /// glides in with the same slide + fade instead of snapping open. The
