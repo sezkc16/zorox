@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_file/open_file.dart';
 import 'package:path_provider/path_provider.dart';
@@ -16,6 +17,7 @@ import '../../../core/storage/secure_token_storage.dart';
 import '../../../core/storage/storage_service.dart';
 import '../../extensions/providers/extensions_controller.dart';
 import '../../library/presentation/history_provider.dart';
+import '../../library/presentation/library_provider.dart';
 import 'zorox_backup.dart';
 import 'zorox_sync_client.dart';
 
@@ -93,6 +95,15 @@ class ZoroxAccountNotifier extends Notifier<ZoroxAccountState> {
   final _client = ZoroxSyncClient();
   Timer? _autoSyncTimer;
   bool _restored = false;
+
+  /// Re-entrancy guards for the file pickers. A double-tap on Import (or
+  /// Export) fired `pickFile` twice, and file_picker throws
+  /// `PlatformException(multiple_request)` for a second pick while one is
+  /// already open — the import then died before the backup was even read.
+  /// While one is in progress, further taps are ignored (they return null,
+  /// which the UI already treats as "user cancelled").
+  bool _importInProgress = false;
+  bool _exportInProgress = false;
 
   @override
   ZoroxAccountState build() {
@@ -610,9 +621,23 @@ class ZoroxAccountNotifier extends Notifier<ZoroxAccountState> {
       errors.add('CloudStream plugins were not restored: $e');
     }
 
+    // Push the restored items into the Home / Library UI. Both providers
+    // are keep-alive and cache their lists, and this restore writes straight
+    // to the boxes/repository — without a refresh, Continue Watching and the
+    // Library keep showing the pre-import (empty) list until the app
+    // restarts. This was the "import restores plugins but not history"
+    // bug: the entries WERE in the box, the Home just never re-read them.
+    if (historyRestored > 0) {
+      ref.read(watchHistoryProvider.notifier).refresh();
+    }
+    if (libraryRestored > 0) {
+      ref.read(libraryProvider.notifier).refresh();
+    }
+
     return ZoroxRestoreReport(
       historyRestored: historyRestored,
       historySkipped: historySkipped,
+      historyInBackup: backup.history.length,
       libraryRestored: libraryRestored,
       skystreamReposRestored: skystreamReposRestored,
       skystreamPluginsRestored: skystreamPluginsRestored,
@@ -662,6 +687,16 @@ class ZoroxAccountNotifier extends Notifier<ZoroxAccountState> {
   /// iOS there is no save dialog, so the file goes to a temp file and the
   /// share sheet opens for "Save to Files".
   Future<({String path, bool openedShareSheet})?> exportBackupFile() async {
+    if (_exportInProgress) return null;
+    _exportInProgress = true;
+    try {
+      return await _exportBackupFile();
+    } finally {
+      _exportInProgress = false;
+    }
+  }
+
+  Future<({String path, bool openedShareSheet})?> _exportBackupFile() async {
     final backup = await collectBackup();
     final bytes = utf8.encode(
       const JsonEncoder.withIndent('  ').convert(backup.toJson()),
@@ -693,24 +728,49 @@ class ZoroxAccountNotifier extends Notifier<ZoroxAccountState> {
   /// null when the user cancels the picker. Throws [ZoroxSyncException]
   /// when the file is not a ZoroX backup.
   Future<ZoroxRestoreReport?> importBackupFile() async {
-    final picked = await FilePicker.pickFile(
-      dialogTitle: 'Import ZoroX backup',
-      type: FileType.custom,
-      allowedExtensions: ['json'],
-    );
-    if (picked == null) return null;
-    // On iOS the picked file is a security-scoped URL, not a plain path:
-    // XFile reads it either way.
-    final bytes = picked.path != null
-        ? await File(picked.path!).readAsBytes()
-        : await picked.xFile.readAsBytes();
-    final decoded = jsonDecode(utf8.decode(bytes));
-    if (decoded is! Map) {
-      throw const ZoroxSyncException('That file is not a ZoroX backup.');
+    if (_importInProgress) return null;
+    _importInProgress = true;
+    try {
+      return await _importBackupFile();
+    } finally {
+      _importInProgress = false;
     }
-    final backup = ZoroxBackup.fromJson(
-      Map<String, dynamic>.from(decoded),
-    );
-    return restoreBackup(backup);
+  }
+
+  Future<ZoroxRestoreReport?> _importBackupFile() async {
+    try {
+      // file_picker throws PlatformException(multiple_request) when a pick
+      // is started while another pick is still open (a stale pending
+      // picker). The raw exception reads like a crash; tell the user to
+      // tap Import again instead — the guard above is reset in `finally`,
+      // so the next tap works. (Only the picker in this block can throw a
+      // PlatformException, so the catch below is effectively pick-only.)
+      final picked = await FilePicker.pickFile(
+        dialogTitle: 'Import ZoroX backup',
+        type: FileType.custom,
+        allowedExtensions: ['json'],
+      );
+      if (picked == null) return null;
+      // On iOS the picked file is a security-scoped URL, not a plain path:
+      // XFile reads it either way.
+      final bytes = picked.path != null
+          ? await File(picked.path!).readAsBytes()
+          : await picked.xFile.readAsBytes();
+      final decoded = jsonDecode(utf8.decode(bytes));
+      if (decoded is! Map) {
+        throw const ZoroxSyncException('That file is not a ZoroX backup.');
+      }
+      final backup = ZoroxBackup.fromJson(
+        Map<String, dynamic>.from(decoded),
+      );
+      return await restoreBackup(backup);
+    } on PlatformException catch (e) {
+      if (e.code == 'multiple_request') {
+        throw const ZoroxSyncException(
+          'The file picker was already open — please tap Import again.',
+        );
+      }
+      rethrow;
+    }
   }
 }

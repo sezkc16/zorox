@@ -1,0 +1,39 @@
+/// The Import confirmation must tell an empty backup apart from a restore
+/// that found nothing new: a backup exported from an empty app holds no
+/// history at all, so the toast says so plainly instead of the vague
+/// "Nothing new to restore." — otherwise the user cannot tell an empty
+/// backup from a broken restore (the v6 Import bug).
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:skystream/features/account/data/zorox_backup.dart';
+
+void main() {
+  test('empty backup says it has no watch history', () {
+    const report = ZoroxRestoreReport(historyInBackup: 0);
+    expect(report.summary, 'This backup has no watch history.');
+  });
+
+  test('backup with history already on device says nothing new', () {
+    const report = ZoroxRestoreReport(
+      historyInBackup: 3,
+      historySkipped: 3,
+    );
+    expect(report.summary, 'Nothing new to restore.');
+  });
+
+  test('restored history is counted', () {
+    const report = ZoroxRestoreReport(
+      historyRestored: 2,
+      historyInBackup: 2,
+    );
+    expect(report.summary, 'Restored 2 history items.');
+  });
+
+  test('a real restore is not hidden by an empty history', () {
+    const report = ZoroxRestoreReport(
+      historyInBackup: 0,
+      skystreamPluginsRestored: 2,
+    );
+    expect(report.summary, 'Restored 2 plugins.');
+  });
+}

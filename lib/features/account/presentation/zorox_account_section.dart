@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/services/notification_service.dart';
@@ -145,6 +146,20 @@ class ZoroxAccountSection extends ConsumerWidget {
           .read(notificationServiceProvider)
           .showError(
             e.message,
+            title: 'ZoroX Account',
+            icon: Icons.error_outline_rounded,
+          );
+    } on PlatformException catch (e) {
+      // file_picker's `multiple_request`: a pick was started while another
+      // pick was still open. Never show the raw exception — the user just
+      // needs to tap Import again (the guard is already reset by then).
+      if (!context.mounted) return;
+      ref
+          .read(notificationServiceProvider)
+          .showError(
+            e.code == 'multiple_request'
+                ? 'The file picker was already open — please tap Import again.'
+                : 'Could not import the backup: ${e.message ?? e.code}',
             title: 'ZoroX Account',
             icon: Icons.error_outline_rounded,
           );

@@ -117,6 +117,7 @@ class ZoroxRestoreReport {
   const ZoroxRestoreReport({
     this.historyRestored = 0,
     this.historySkipped = 0,
+    this.historyInBackup = 0,
     this.libraryRestored = 0,
     this.skystreamReposRestored = 0,
     this.skystreamPluginsRestored = 0,
@@ -129,6 +130,11 @@ class ZoroxRestoreReport {
 
   /// Entries the local copy already had newer than the backup.
   final int historySkipped;
+
+  /// How many history entries the backup file actually held (0 when it was
+  /// exported from an empty app). Lets the summary tell an empty backup
+  /// apart from a restore that found nothing new.
+  final int historyInBackup;
   final int libraryRestored;
   final int skystreamReposRestored;
   final int skystreamPluginsRestored;
@@ -152,7 +158,14 @@ class ZoroxRestoreReport {
       if (skystreamPluginsRestored > 0 || cloudstreamPluginsRestored > 0)
         '${skystreamPluginsRestored + cloudstreamPluginsRestored} plugin${skystreamPluginsRestored + cloudstreamPluginsRestored == 1 ? '' : 's'}',
     ];
-    if (parts.isEmpty) return 'Nothing new to restore.';
+    if (parts.isEmpty) {
+      // A backup exported from an empty app holds no history at all — say
+      // that plainly, instead of the vague "Nothing new", so the user can
+      // tell an empty backup from a restore that skipped what was already
+      // on this device (historyInBackup > 0, all skipped = already here).
+      if (historyInBackup == 0) return 'This backup has no watch history.';
+      return 'Nothing new to restore.';
+    }
     return 'Restored ${parts.join(', ')}.';
   }
 }

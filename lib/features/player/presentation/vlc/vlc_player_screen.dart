@@ -1077,14 +1077,16 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           // media carries its own interval, and its read-ahead from the
           // buffer rule: see playbackMediaOptions.
           networkCaching: kVodCachingMs,
-          // Instance-level read-ahead (128 MiB, was 64 MiB in v3): the
+          // Instance-level read-ahead (256 MiB, was 128 MiB in v4): the
           // prefetch ring libVLC reads ahead of the demuxer, so a
           // double-tap seek has data waiting instead of re-fetching.
-          // 1080p at ~8 Mbit/s is about two minutes of video in 128 MiB,
-          // 4K at ~25 Mbit/s about forty seconds — comfortably more than
+          // 1080p at ~8 Mbit/s is about four minutes of video in 256 MiB,
+          // 4K at ~25 Mbit/s about eighty seconds — comfortably more than
           // a ±10 s step. A per-media :prefetch-buffer-size from the
-          // buffer plan still overrides this. Costs 128 MiB resident.
-          prefetchBufferKiB: 131072,
+          // buffer plan still overrides this. Costs 256 MiB resident.
+          // (kVodCachingMs stays 10000: it is a latency budget, not a
+          // window — HLS/DASH ignore it, and the repo test pins it.)
+          prefetchBufferKiB: 262144,
           userAgent: kDefaultBrowserUserAgent,
           // HLS and DASH Auto follow the link: the highest rendition allowed
           // for three segments, then down as the buffer drains and up as it
