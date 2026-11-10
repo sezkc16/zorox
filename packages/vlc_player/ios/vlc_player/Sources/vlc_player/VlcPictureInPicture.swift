@@ -320,23 +320,13 @@ extension VlcPictureInPictureController: AVPictureInPictureSampleBufferPlaybackD
     }
   }
 
-  // NOTE: the label is `completion:`, not `completionHandler:` — the SDK
-  // renamed it, and the old label no longer matches the protocol (Xcode
-  // 26: "has been renamed to 'pictureInPictureController(_:skipByInterval:
-  // completion:)'" and the type then fails to conform).
-  func pictureInPictureController(
-    _ pictureInPictureController: AVPictureInPictureController,
-    skipByInterval skipInterval: CMTime,
-    completion: @escaping () -> Void
-  ) {
-    player?.pipSkip(by: skipInterval.seconds)
-    completion()
-  }
-
-  // The same skip, as an async method: some SDKs import the completion-
-  // handler form as async, so this overload covers that spelling too.
-  // (Different selector from the completion: form above, so no conflict;
-  // the unused one is simply never called.)
+  // The skip callback, as an async method: this SDK imports the
+  // completion-handler form as async, so the completion: spelling does
+  // NOT satisfy the protocol — and the two spellings share the same
+  // Obj-C selector ('pictureInPictureController:skipByInterval:
+  // completionHandler:'), so keeping both is a compile error. Async
+  // only. (Build 42907892284: "conflicts with method ... with the same
+  // Objective-C selector".)
   func pictureInPictureController(
     _ pictureInPictureController: AVPictureInPictureController,
     skipByInterval skipInterval: CMTime
