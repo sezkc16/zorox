@@ -419,9 +419,10 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
     ExtensionsState state,
   ) {
     final l10n = AppLocalizations.of(context)!;
-    // CloudStream's repositories live in their own store, and this screen
-    // only read SkyStream's — so a CloudStream repository seeded at launch
-    // never showed up here and the tab looked empty. Both are listed now.
+    // CloudStream's repositories live in their own store, separate from
+    // SkyStream's extension system, and each store has its own section
+    // with its own add row below — a repository added in one section lands
+    // in that section only.
     final csRepositories = ref.watch(
       cloudStreamRepositoryProvider.select((s) => s.repositories),
     );
@@ -434,55 +435,15 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
         csLoading) {
       return const Center(child: AppLoadingIndicator());
     }
-    final isEmpty =
-        state.repositories.isEmpty && csRepositories.isEmpty;
-
-    if (isEmpty) {
-      return ListView(
-        padding: const EdgeInsets.all(LayoutConstants.spacingLg),
-        children: [
-          const SizedBox(height: LayoutConstants.spacingLg),
-          _FocusableCard(
-            margin: EdgeInsets.zero,
-            child: Padding(
-              padding: const EdgeInsets.all(LayoutConstants.spacingLg),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.snippet_folder_outlined,
-                    size: 48,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: LayoutConstants.spacingMd),
-                  Text(
-                    l10n.noReposFound,
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: LayoutConstants.spacingSm),
-                  Text(
-                    l10n.addRepoDescription,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: LayoutConstants.spacingLg),
-                  FilledButton.icon(
-                    icon: const Icon(Icons.add_circle_outline),
-                    label: Text(l10n.addRepository),
-                    onPressed: () => _showAddRepoDialog(context, ref),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
+    // Two separate sections, each with its own add flow, so a repository
+    // lands in the section it belongs to. SkyStream's own extension system
+    // takes a repository manifest (name + id/packageName + pluginLists) or
+    // a shortcode; CloudStream's store takes repo.json or a bare plugin
+    // list. The single add row used to feed only SkyStream's fetcher,
+    // which requires a manifest to carry an id/packageName — so no
+    // CloudStream repo.json could be added at all.
+    // Both sections stay visible even with nothing in them yet, so each
+    // add flow is always reachable.
     return ListView(
       padding: EdgeInsets.only(
         bottom: LayoutConstants.shellBottomContentPadding(context),
@@ -490,6 +451,11 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
       ),
       addAutomaticKeepAlives: false,
       children: [
+        // SkyStream's own extension system (repository manifest).
+        const RepositoryGroupHeader(
+          icon: Icons.extension_rounded,
+          label: 'SkyStream',
+        ),
         for (final repo in state.repositories)
           _buildRepositoryCard(
             context,
@@ -499,41 +465,71 @@ class _ExtensionsScreenState extends ConsumerState<ExtensionsScreen>
             state.availablePlugins[repo.url] ?? [],
             l10n,
           ),
-        if (csRepositories.isNotEmpty)
-          const CloudStreamRepositoriesSection(),
-        // The extra item: an add-repository row pinned below the list.
-        Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: LayoutConstants.spacingMd,
-            vertical: LayoutConstants.spacingSm,
-          ),
-          child: _FocusableCard(
-            margin: EdgeInsets.zero,
-            borderColor: Theme.of(context).colorScheme.primary
-                .withValues(alpha: 0.3),
-            // A card holding one row still hands the focus affordance to the
-            // row, so this is marked like every other row in the list.
-            child: _FocusableRow(
-              child: ListTile(
-                focusColor: Theme.of(context).colorScheme.primary
-                    .withValues(alpha: 0.15),
-                leading: Icon(
-                  Icons.add_circle_outline,
-                  color: Theme.of(context).colorScheme.primary,
-                ),
-                title: Text(
-                  l10n.addRepo,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                onTap: () => _showAddRepoDialog(context, ref),
+        // The section stays when its last repository is removed: the
+        // header and the add row remain, so a repository can be added
+        // back into this section.
+        if (state.repositories.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: LayoutConstants.spacingMd,
+              vertical: LayoutConstants.spacingSm,
+            ),
+            child: Text(
+              'No SkyStream repos yet',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
           ),
+        _buildAddRepoRow(
+          context,
+          title: l10n.addRepository,
+          onTap: () => _showAddRepoDialog(context, ref),
         ),
+        // CloudStream's store (repo.json): its own header, cards and add
+        // row live in [CloudStreamRepositoriesSection].
+        const CloudStreamRepositoriesSection(),
       ],
+    );
+  }
+
+  /// The add-repository row for a section: the same card as the old single
+  /// row, now one per section so each section adds into its own store.
+  Widget _buildAddRepoRow(
+    BuildContext context, {
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: LayoutConstants.spacingMd,
+        vertical: LayoutConstants.spacingSm,
+      ),
+      child: _FocusableCard(
+        margin: EdgeInsets.zero,
+        borderColor: Theme.of(context).colorScheme.primary
+            .withValues(alpha: 0.3),
+        // A card holding one row still hands the focus affordance to the
+        // row, so this is marked like every other row in the list.
+        child: _FocusableRow(
+          child: ListTile(
+            focusColor: Theme.of(context).colorScheme.primary
+                .withValues(alpha: 0.15),
+            leading: Icon(
+              Icons.add_circle_outline,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            title: Text(
+              title,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            onTap: onTap,
+          ),
+        ),
+      ),
     );
   }
 

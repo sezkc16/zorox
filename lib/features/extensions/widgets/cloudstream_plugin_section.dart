@@ -8,6 +8,7 @@ import '../../../core/cloudstream/cloudstream_repository.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../l10n/generated/app_localizations.dart';
 import '../../../shared/widgets/loading_indicator.dart';
+import '../../../shared/widgets/text_input_dialog.dart';
 
 /// The CloudStream part of the Plugins (Extensions) screen.
 ///
@@ -18,24 +19,98 @@ import '../../../shared/widgets/loading_indicator.dart';
 /// (and the installed CloudStream plugins) beside SkyStream's own, with
 /// install / update / uninstall wired to [CloudStreamRepository].
 ///
-/// The two seeded repositories are the two options the user asked for:
-/// "SkyStream" is the owner's own repo (TojiX — the repository for this
-/// app), "CloudStream" is the official CloudStream providers repository.
-/// The labels come from [CloudStreamRepository.displayNameFor], computed
-/// from the URL at display time (a manifest's own name is what a refresh
-/// stores, so a stored rename would not survive one).
+/// Both stores are shown under one "CloudStream" section here: the owner's
+/// repo (TojiX) is a CloudStream-format repository (repo.json), so it sits
+/// in this section under its manifest name, next to the official CloudStream
+/// providers repository. It used to be labelled "SkyStream" because the
+/// label was computed from its URL — a CloudStream repo under the wrong
+/// section. The section has its own add row, which uses the CloudStream
+/// fetcher: a repo.json manifest (name + pluginLists, no id/packageName
+/// needed) or a bare plugin list lands here, and a repository that is
+/// already there is refreshed in place, not duplicated. SkyStream's own
+/// add row lives in the SkyStream section of the Repositories tab.
 ///
 /// The full CloudStream screen (Settings → CloudStream Extensions) still has
 /// the switch, the add-repository dialog and each plugin's settings / support
 /// buttons; this section is only the repositories and their plugins.
 
-/// The CloudStream repositories, grouped as the two options the Plugins
-/// screen offers — "SkyStream" (the owner's TojiX repo) and "CloudStream"
-/// (the official repository, plus any other CloudStream-format repository
-/// the user added). Nothing when there are none yet (the screen's own empty
-/// state covers that); a spinner while the first load is still running.
+/// The CloudStream repositories, under the one "CloudStream" section
+/// header — the owner's TojiX repo and the official repository, plus any
+/// other CloudStream-format repository the user added. The section has its
+/// own add row (see [_showAddRepoDialog]); the header and the row stay
+/// even when there are no repositories yet, so the CloudStream add flow is
+/// always reachable. A spinner while the first load is still running.
 class CloudStreamRepositoriesSection extends ConsumerWidget {
   const CloudStreamRepositoriesSection({super.key});
+
+  /// This section's add flow: the CloudStream fetcher, not SkyStream's.
+  /// A repo.json manifest (name + pluginLists, no id/packageName needed)
+  /// or a bare plugin list lands here. A repository that is already there
+  /// is refreshed in place instead of a duplicate card.
+  Future<void> _showAddRepoDialog(BuildContext context, WidgetRef ref) async {
+    final l10n = AppLocalizations.of(context)!;
+    final messenger = ScaffoldMessenger.of(context);
+    final input = await TextInputDialog.show(
+      context,
+      title: l10n.cloudStreamAddRepositoryTitle,
+      message: l10n.cloudStreamAddRepositoryMessage,
+      hintText: l10n.repoUrlOrShortcode,
+      keyboardType: TextInputType.url,
+      confirmLabel: l10n.cloudStreamAdd,
+      showPasteButton: true,
+      width: 480,
+    );
+    if (input == null || input.isEmpty || !context.mounted) return;
+    final notifier = ref.read(cloudStreamRepositoryProvider.notifier);
+    try {
+      final url = await notifier.resolveUrl(input);
+      final existing = ref
+          .read(cloudStreamRepositoryProvider)
+          .repositories
+          .where((r) => r.url == url)
+          .firstOrNull;
+      if (existing != null) {
+        final failure = await notifier.refreshRepository(url);
+        if (failure != null) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(l10n.cloudStreamCouldNotAdd(failure)),
+            ),
+          );
+          return;
+        }
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              l10n.cloudStreamRepositoryAdded(
+                existing.plugins.length,
+                existing.name,
+              ),
+            ),
+          ),
+        );
+        return;
+      }
+      final repo = await notifier.addRepository(input);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.cloudStreamRepositoryAdded(repo.plugins.length, repo.name),
+          ),
+        ),
+      );
+    } catch (error) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            l10n.cloudStreamCouldNotAdd(
+              CloudStreamRepository.errorMessage(error),
+            ),
+          ),
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -46,41 +121,68 @@ class CloudStreamRepositoriesSection extends ConsumerWidget {
         child: Center(child: AppLoadingIndicator()),
       );
     }
-    if (state.repositories.isEmpty) return const SizedBox.shrink();
-    final skyStream = [
-      for (final repo in state.repositories)
-        if (CloudStreamRepository.isSkyStreamRepository(repo.url)) repo,
-    ];
-    final cloudStream = [
-      for (final repo in state.repositories)
-        if (!CloudStreamRepository.isSkyStreamRepository(repo.url)) repo,
-    ];
+    final l10n = AppLocalizations.of(context)!;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (skyStream.isNotEmpty) ...[
-          const _GroupHeader(
-            icon: Icons.extension_rounded,
-            label: 'SkyStream',
+        const RepositoryGroupHeader(
+          icon: Icons.cloud_rounded,
+          label: 'CloudStream',
+        ),
+        for (final repo in state.repositories)
+          _CloudStreamRepositoryCard(repo: repo),
+        // The section stays when its last repository is removed: the
+        // header and the add row remain, so a repository can be added
+        // back into this section.
+        if (state.repositories.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: LayoutConstants.spacingMd,
+              vertical: LayoutConstants.spacingSm,
+            ),
+            child: Text(
+              'No CloudStream repos yet',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
           ),
-          for (final repo in skyStream)
-            _CloudStreamRepositoryCard(repo: repo),
-        ],
-        if (cloudStream.isNotEmpty) ...[
-          const _GroupHeader(icon: Icons.cloud_rounded, label: 'CloudStream'),
-          for (final repo in cloudStream)
-            _CloudStreamRepositoryCard(repo: repo),
-        ],
+        // This section's own add row: a CloudStream-format repository
+        // lands here, not under SkyStream.
+        Card(
+          margin: const EdgeInsets.symmetric(
+            horizontal: LayoutConstants.spacingMd,
+            vertical: LayoutConstants.spacingSm,
+          ),
+          child: ListTile(
+            leading: Icon(
+              Icons.add_circle_outline,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            title: Text(
+              l10n.cloudStreamAddRepositoryTitle,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            onTap: () => unawaited(_showAddRepoDialog(context, ref)),
+          ),
+        ),
       ],
     );
   }
 }
 
-/// A section header for one of the two repository options, in the same
+/// A section header for one of the two repository sections, in the same
 /// style as the screen's other section titles.
-class _GroupHeader extends StatelessWidget {
-  const _GroupHeader({required this.icon, required this.label});
+class RepositoryGroupHeader extends StatelessWidget {
+  const RepositoryGroupHeader({
+    super.key,
+    required this.icon,
+    required this.label,
+  });
 
   final IconData icon;
   final String label;
@@ -115,10 +217,9 @@ class _GroupHeader extends StatelessWidget {
   }
 }
 
-/// The installed CloudStream plugins, for the Installed tab, grouped the
-/// same way as the repositories — "SkyStream" (from the owner's TojiX repo)
-/// and "CloudStream" (from the official repository and any other). Nothing
-/// when there are none.
+/// The installed CloudStream plugins, for the Installed tab, under the one
+/// "CloudStream" group — including the ones from the owner's TojiX repo,
+/// which used to be grouped under "SkyStream". Nothing when there are none.
 class CloudStreamInstalledSection extends ConsumerWidget {
   const CloudStreamInstalledSection({super.key});
 
@@ -126,35 +227,14 @@ class CloudStreamInstalledSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(cloudStreamRepositoryProvider);
     if (state.installed.isEmpty) return const SizedBox.shrink();
-    final skyStream = [
-      for (final plugin in state.installed)
-        if (CloudStreamRepository.isSkyStreamRepository(
-          plugin.info.repositoryUrl,
-        ))
-          plugin,
-    ];
-    final cloudStream = [
-      for (final plugin in state.installed)
-        if (!CloudStreamRepository.isSkyStreamRepository(
-          plugin.info.repositoryUrl,
-        ))
-          plugin,
-    ];
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (skyStream.isNotEmpty)
-          _InstalledGroupCard(
-            icon: Icons.extension_rounded,
-            label: 'SkyStream',
-            plugins: skyStream,
-          ),
-        if (cloudStream.isNotEmpty)
-          _InstalledGroupCard(
-            icon: Icons.cloud_rounded,
-            label: 'CloudStream',
-            plugins: cloudStream,
-          ),
+        _InstalledGroupCard(
+          icon: Icons.cloud_rounded,
+          label: 'CloudStream',
+          plugins: state.installed,
+        ),
       ],
     );
   }
@@ -217,7 +297,8 @@ class _CloudStreamRepositoryCard extends ConsumerWidget {
 
   Future<void> _confirmRemove(BuildContext context, WidgetRef ref) async {
     final l10n = AppLocalizations.of(context)!;
-    // The option's label, not the manifest's own name.
+    // The card's label: the manifest's own name ("TojiX Repo"), or
+    // "CloudStream" for the official repository.
     final displayName = CloudStreamRepository.displayNameFor(repo);
     final remove = await showDialog<bool>(
       context: context,
@@ -259,7 +340,8 @@ class _CloudStreamRepositoryCard extends ConsumerWidget {
   Future<void> _refresh(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
     final l10n = AppLocalizations.of(context)!;
-    // The option's label, not the manifest's own name.
+    // The card's label: the manifest's own name ("TojiX Repo"), or
+    // "CloudStream" for the official repository.
     final displayName = CloudStreamRepository.displayNameFor(repo);
     final failure = await ref
         .read(cloudStreamRepositoryProvider.notifier)
@@ -297,8 +379,8 @@ class _CloudStreamRepositoryCard extends ConsumerWidget {
         collapsedShape: const Border(),
         initiallyExpanded: repo.plugins.length <= 12,
         title: Text(
-          // The option's label, not the manifest's own name: "SkyStream"
-          // for the owner's repo, "CloudStream" for the official one.
+          // The card's label: the manifest's own name, or "CloudStream"
+          // for the official repository.
           CloudStreamRepository.displayNameFor(repo),
           style: theme.textTheme.titleMedium?.copyWith(
             color: cs.primary,

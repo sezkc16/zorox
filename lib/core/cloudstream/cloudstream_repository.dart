@@ -251,21 +251,20 @@ class CloudStreamRepository extends _$CloudStreamRepository {
     _cloudStreamRepositoryUrl,
   ];
 
-  /// The two repositories ZoroX seeds, as the Plugins screen labels them:
-  /// the owner's repo (TojiX) is the "SkyStream" option — the repository for
-  /// this app — and the official CloudStream providers repository is the
-  /// "CloudStream" option. A manifest's own `name` ("TojiX Repo") is what a
-  /// refresh stores, so the label is computed from the URL at display time
-  /// rather than renamed in storage (a rename would be overwritten by the
-  /// next refresh). Anything else is shown under its manifest name.
-  static bool isSkyStreamRepository(String url) =>
-      url == _tojiXRepositoryUrl || url == _legacyTojiXRepositoryUrl;
-
+  /// The repositories ZoroX seeds, as the Plugins screen labels them:
+  /// the official CloudStream providers repository is the "CloudStream"
+  /// option. The owner's repo (TojiX) is a CloudStream-format repository
+  /// too, so it is shown under its manifest name ("TojiX Repo") in the
+  /// CloudStream section — it used to be labelled "SkyStream" because the
+  /// label was computed from its URL, which put a CloudStream repo under
+  /// the wrong section. A manifest's own `name` is what a refresh stores,
+  /// so a stored rename would not survive one, which is why the label for
+  /// the official repository is still computed from the URL at display
+  /// time. Anything else is shown under its manifest name.
   static bool isCloudStreamRepository(String url) =>
       url == _cloudStreamRepositoryUrl;
 
   static String displayNameFor(CsRepository repo) {
-    if (isSkyStreamRepository(repo.url)) return 'SkyStream';
     if (isCloudStreamRepository(repo.url)) return 'CloudStream';
     return repo.name;
   }
