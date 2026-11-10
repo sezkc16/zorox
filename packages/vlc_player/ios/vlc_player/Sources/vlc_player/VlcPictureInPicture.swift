@@ -332,4 +332,26 @@ extension VlcPictureInPictureController: AVPictureInPictureSampleBufferPlaybackD
     player?.pipSkip(by: skipInterval.seconds)
     completion()
   }
+
+  // The same skip, as an async method: some SDKs import the completion-
+  // handler form as async, so this overload covers that spelling too.
+  // (Different selector from the completion: form above, so no conflict;
+  // the unused one is simply never called.)
+  func pictureInPictureController(
+    _ pictureInPictureController: AVPictureInPictureController,
+    skipByInterval skipInterval: CMTime
+  ) async {
+    player?.pipSkip(by: skipInterval.seconds)
+  }
+
+  // Called when the PiP window changes size (e.g. pinch-to-zoom). A
+  // no-op here: frames are fed at the video's native size and the
+  // AVSampleBufferDisplayLayer scales them, so there is no media variant
+  // to switch to. (Required by the protocol — without it the type does
+  // not conform at all, which was the last remaining build error.)
+  func pictureInPictureController(
+    _ pictureInPictureController: AVPictureInPictureController,
+    didTransitionToRenderSize newRenderSize: CMVideoDimensions
+  ) {
+  }
 }
