@@ -21,7 +21,24 @@ workflows:
       - name: Get Flutter packages
         script: flutter pub get
       - name: Build iOS (release, no codesign)
-        script: flutter build ios --release --no-codesign
+        # NOTE (2026-11-11): `flutter build ios --release --no-codesign` FAILS on
+        # Codemagic — Flutter still demands a Development Team / Provisioning
+        # Profile for a device build, even with --no-codesign (the Xcode build
+        # itself succeeds, 53.4s, then Flutter's team check kills it).
+        # Fix: configure only (writes Generated.xcconfig, no build), then build
+        # with xcodebuild directly and signing fully disabled. That bypasses
+        # Flutter's team check and produces the same unsigned Runner.app.
+        script: |
+          flutter build ios --release --config-only
+          xcodebuild -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM=""
       - name: Package unsigned IPA
         script: |
           mkdir -p Payload
