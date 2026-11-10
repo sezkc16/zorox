@@ -8,6 +8,7 @@ import '../../../core/theme/theme_provider.dart';
 
 import 'widgets/settings_widgets.dart';
 import 'widgets/settings_dialogs.dart';
+import 'widgets/accent_color_picker.dart';
 import 'full_screen_mode_provider.dart';
 import 'general_settings_provider.dart';
 import 'app_version_provider.dart';
@@ -116,6 +117,10 @@ class SettingsScreen extends ConsumerWidget {
               : (themeMode == ThemeMode.dark ? l10n.dark : l10n.light),
           onTap: () => showThemeDialog(context, ref, themeMode),
         ),
+        // Accent color (ZoroX v7): Gold by default, 8 presets. Sits right
+        // under the Theme tile — it is the theme's accent, not a separate
+        // section.
+        const AccentColorPicker(),
         SettingsTile(
           icon: Icons.translate_rounded,
           title: l10n.language,

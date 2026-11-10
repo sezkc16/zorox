@@ -15,6 +15,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:challenge_browser/challenge_browser.dart' show PageDialog;
 
 import 'core/theme/theme_provider.dart';
+import 'core/theme/accent_color.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'core/storage/storage_service.dart';
@@ -510,6 +511,7 @@ class _MyAppState extends ConsumerState<MyApp> {
   @override
   Widget build(BuildContext context) {
     final themeMode = ref.watch(appThemeModeProvider);
+    final accent = ref.watch(accentColorProvider);
     final appRouter = ref.watch(appRouterProvider);
     final locale = ref.watch(localeProvider);
     final profileAsync = ref.watch(deviceProfileProvider);
@@ -526,8 +528,13 @@ class _MyAppState extends ConsumerState<MyApp> {
 
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
+        // The user's accent wins over the OS dynamic colour once they pick
+        // one; with the default Gold the system colour is left alone, so
+        // Android's Material You keeps working until a choice is made.
+        // (On iOS the dynamic scheme is always null, so the accent is the
+        // seed from the first launch.)
         ColorScheme? darkScheme;
-        if (darkDynamic != null) {
+        if (darkDynamic != null && accent == ZoroxAccent.gold) {
           darkScheme = darkDynamic;
         }
 
@@ -539,9 +546,12 @@ class _MyAppState extends ConsumerState<MyApp> {
           debugShowCheckedModeBanner: false,
           themeMode: themeMode,
           theme: lightDynamic != null
-              ? AppTheme.createLightTheme(lightDynamic)
-              : AppTheme.createLightTheme(null),
-          darkTheme: AppTheme.createDarkTheme(darkScheme),
+              ? AppTheme.createLightTheme(lightDynamic, accent: accent.color)
+              : AppTheme.createLightTheme(null, accent: accent.color),
+          darkTheme: AppTheme.createDarkTheme(
+            darkScheme,
+            seedColor: accent.color,
+          ),
           routerConfig: appRouter,
           locale: locale,
           localizationsDelegates: const [

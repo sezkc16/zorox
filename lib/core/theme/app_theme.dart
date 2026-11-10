@@ -118,12 +118,15 @@ class AppTheme {
   static TabBarThemeData _tabBarTheme(ColorScheme cs) =>
       TabBarThemeData(overlayColor: AppFocus.overlay(cs));
 
-  static ThemeData createDarkTheme(ColorScheme? dynamicScheme) {
+  static ThemeData createDarkTheme(
+    ColorScheme? dynamicScheme, {
+    Color seedColor = const Color(0xFFD4AF37),
+  }) {
     _registerFontLicence();
     var colorScheme =
         dynamicScheme ??
         ColorScheme.fromSeed(
-          seedColor: const Color(0xFFD4AF37), // Gold Accent seed
+          seedColor: seedColor, // Accent seed (Gold by default, v7 picker)
           brightness: Brightness.dark,
           surface: const Color(0xFF161618), // Cards
         );
@@ -323,9 +326,9 @@ class AppTheme {
     );
   }
 
-  static ThemeData createLightTheme(ColorScheme? dynamicScheme) {
+  static ThemeData createLightTheme(ColorScheme? dynamicScheme, {Color? accent}) {
     _registerFontLicence();
-    const colorScheme = ColorScheme.light(
+    var colorScheme = const ColorScheme.light(
       primary: lightCoral,
       onPrimary: Colors.white,
       primaryContainer: Color(0xFFFFDAD4),
@@ -351,6 +354,25 @@ class AppTheme {
       surfaceContainerHigh: lightSurfaceHighlight,
       surfaceContainerHighest: Color(0xFFE4D9C8),
     );
+
+    // The accent drives the light theme's primary too, so the picker works
+    // in both themes. Containers are a light tint of the accent; their "on"
+    // colour is the accent darkened, so text stays readable on them.
+    if (accent != null) {
+      final hsl = HSLColor.fromColor(accent);
+      final darkAccent =
+          hsl.withLightness((hsl.lightness - 0.35).clamp(0.0, 1.0)).toColor();
+      colorScheme = colorScheme.copyWith(
+        primary: accent,
+        onPrimary: Colors.white,
+        primaryContainer: accent.withValues(alpha: 0.18),
+        onPrimaryContainer: darkAccent,
+        tertiary: accent,
+        onTertiary: Colors.white,
+        tertiaryContainer: accent.withValues(alpha: 0.18),
+        onTertiaryContainer: darkAccent,
+      );
+    }
 
     return ThemeData(
       useMaterial3: true,

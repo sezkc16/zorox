@@ -21,6 +21,15 @@ class SettingsRepository {
     return _storageService.getThemeMode();
   }
 
+  /// Accent color preset name ('gold', 'red', ...). `null` = never picked.
+  Future<void> saveAccentColor(String name) async {
+    await _storageService.saveAccentColor(name);
+  }
+
+  String? getAccentColor() {
+    return _storageService.getAccentColor();
+  }
+
   Future<void> setSidebarExpanded(bool expanded) async {
     await _storageService.setSidebarExpanded(expanded);
   }

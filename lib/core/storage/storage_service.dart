@@ -198,6 +198,19 @@ class StorageService {
     return _settingsBox.get('theme_mode') as String?;
   }
 
+  /// Accent color (ZoroX v7, 2.9.6): the selected [ZoroxAccent] preset name
+  /// (e.g. 'gold', 'red'). `null` means the user never picked one — Gold.
+  /// Stored by name (not by ARGB value) so a preset's shade can be tuned
+  /// later without orphaning saved choices. Survives app restart; it does
+  /// NOT survive reinstall — app settings are not part of the v1 backup.
+  Future<void> saveAccentColor(String name) async {
+    await _settingsBox.put('accent_color', name);
+  }
+
+  String? getAccentColor() {
+    return _settingsBox.get('accent_color') as String?;
+  }
+
   // --- Sidebar State ---
   Future<void> setSidebarExpanded(bool expanded) async {
     await _settingsBox.put('sidebar_expanded', expanded);
