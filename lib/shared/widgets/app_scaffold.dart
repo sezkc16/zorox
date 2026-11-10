@@ -162,17 +162,22 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
   }
 
   int _getRouteIndex(String route) {
+    // ZoroX nav (approved design preview): Home 0 / Search 1 /
+    // Plugins 2 / Library 3 / Detail 4; Settings is branch 5.
+    // (Explore is no longer a branch, so there is no '/explore' case.)
     switch (route) {
       case '/home':
         return 0;
       case '/search':
         return 1;
-      case '/explore':
+      case '/extensions':
         return 2;
       case '/library':
         return 3;
-      case '/settings':
+      case '/detail':
         return 4;
+      case '/settings':
+        return 5;
       default:
         return 0;
     }

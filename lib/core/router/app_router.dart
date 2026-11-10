@@ -5,7 +5,6 @@ import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:skystream/features/home/presentation/home_screen.dart';
 import 'package:skystream/features/search/presentation/search_screen.dart';
-import '../../features/explore/presentation/explore_screen.dart';
 import 'package:skystream/features/library/presentation/library_screen.dart';
 import 'package:skystream/features/addons/presentation/addons_screen.dart';
 import 'package:skystream/features/addons/presentation/addon_detail_screen.dart';
@@ -19,6 +18,7 @@ import '../../features/settings/presentation/player_settings_screen.dart';
 import '../../features/settings/presentation/account_settings_screen.dart';
 import '../../features/settings/presentation/developer_options_screen.dart';
 import '../../features/details/presentation/details_screen.dart';
+import '../../features/details/presentation/detail_tab_screen.dart';
 import '../../features/details/presentation/tmdb_movie_details_screen.dart';
 import '../../features/explore/presentation/view_all_screen.dart';
 import '../domain/entity/multimedia_item.dart';
@@ -40,11 +40,23 @@ part 'app_router.g.dart';
     TypedStatefulShellBranch<SearchBranchData>(
       routes: [TypedGoRoute<SearchRoute>(path: '/search')],
     ),
-    TypedStatefulShellBranch<ExploreBranchData>(
-      routes: [TypedGoRoute<ExploreRoute>(path: '/explore')],
+    // ZoroX (approved design preview): the bottom nav is EXACTLY
+    // Home / Search / Plugins / Library / Detail, as the user asked
+    // ("neeche home search plugin library detail sab esa hi").
+    // Plugins = the Extensions screen (TojiX repo + providers).
+    // Detail = the detail page of the most recently watched item.
+    // Explore is no longer a tab. Settings stays as a 6th branch —
+    // reachable from the Home AppBar gear, not from the tab bar —
+    // so its sub-routes (player / accounts / nuvio / cloudstream /
+    // stremio / developer) keep working unchanged.
+    TypedStatefulShellBranch<PluginsBranchData>(
+      routes: [TypedGoRoute<ExtensionsRoute>(path: '/extensions')],
     ),
     TypedStatefulShellBranch<LibraryBranchData>(
       routes: [TypedGoRoute<LibraryRoute>(path: '/library')],
+    ),
+    TypedStatefulShellBranch<DetailBranchData>(
+      routes: [TypedGoRoute<DetailTabRoute>(path: '/detail')],
     ),
     TypedStatefulShellBranch<SettingsBranchData>(
       routes: [
@@ -53,7 +65,6 @@ part 'app_router.g.dart';
           routes: [
             TypedGoRoute<PlayerSettingsRoute>(path: 'player'),
             TypedGoRoute<AccountSettingsRoute>(path: 'accounts'),
-            TypedGoRoute<ExtensionsRoute>(path: 'extensions'),
             TypedGoRoute<NuvioPluginsRoute>(path: 'nuvio'),
             TypedGoRoute<CloudStreamRoute>(path: 'cloudstream'),
             TypedGoRoute<AddonsRoute>(path: 'stremio'),
@@ -98,15 +109,19 @@ class SearchRoute extends GoRouteData with $SearchRoute {
       const SearchScreen();
 }
 
-class ExploreBranchData extends StatefulShellBranchData {
-  const ExploreBranchData();
+class PluginsBranchData extends StatefulShellBranchData {
+  const PluginsBranchData();
 }
 
-class ExploreRoute extends GoRouteData with $ExploreRoute {
-  const ExploreRoute();
+class DetailBranchData extends StatefulShellBranchData {
+  const DetailBranchData();
+}
+
+class DetailTabRoute extends GoRouteData with $DetailTabRoute {
+  const DetailTabRoute();
   @override
   Widget build(BuildContext context, GoRouterState state) =>
-      const ExploreScreen();
+      const DetailTabScreen();
 }
 
 class LibraryBranchData extends StatefulShellBranchData {
@@ -496,12 +511,14 @@ final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 /// Branch roots the shell can start on. `/stream` no longer exists, so a
 /// preference saved by an older build has to be migrated instead of handing
-/// GoRouter an unknown initial location.
+/// GoRouter an unknown initial location. Same for `/explore` (the Explore
+/// tab was replaced by Plugins in ZoroX v3).
 const List<String> kShellBranchRoutes = [
   '/home',
   '/search',
-  '/explore',
+  '/extensions',
   '/library',
+  '/detail',
   '/settings',
 ];
 

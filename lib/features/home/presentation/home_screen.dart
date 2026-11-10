@@ -288,6 +288,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               );
             },
           ),
+
+          // 3. Settings gear — Settings is no longer a bottom-nav tab
+          // (the nav is Home / Search / Plugins / Library / Detail),
+          // so this is the way into Settings (repo, theme, player…).
+          Padding(
+            padding: const EdgeInsets.only(right: LayoutConstants.spacingMd),
+            child: CardsWrapper(
+              onTap: () => const SettingsRoute().go(context),
+              borderRadius: BorderRadius.circular(50),
+              child: CircleAvatar(
+                backgroundColor: Theme.of(context).colorScheme.onSurface
+                    .withValues(alpha: 0.1),
+                radius: 18,
+                child: Icon(
+                  Icons.settings_outlined,
+                  color: Theme.of(context).colorScheme.onSurface,
+                  size: 18,
+                ),
+              ),
+            ),
+          ),
         ],
       ),
       body: _buildBody(

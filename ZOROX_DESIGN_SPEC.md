@@ -40,9 +40,30 @@ spec is about colour, layout and shape, not the typeface.
 - Surface: `rgba(18,18,20,.88)` glass (blur 14) with `1px #2E2E33` border and
   `0 12px 30px rgba(0,0,0,.5)` shadow.
 - 5 tabs with icon + label (10px, bold): Home / Search / Plugins / Library /
-  Settings (the preview's 5th tab is labelled "Detail" in the mock; the app
-  maps it to Settings — the app's real 5th branch). In the app the tabs are
-  Home / Search / Explore / Library / Settings.
+  Detail — EXACTLY as the preview shows (the user's own words, 2026-11-11:
+  "neeche home search plugin library detail sab esa hi"). The app's shell
+  branches were re-mapped to match: Home `/home`, Search `/search`, Plugins
+  = the Extensions screen `/extensions` (TojiX repo + providers), Library
+  `/library`, Detail `/detail`. Explore is NO LONGER a tab (removed from
+  the shell; nothing else referenced it). Settings is a 6th shell branch
+  (`/settings`, index 5) — reachable from the gear button in the Home
+  AppBar (right of the provider pill), NOT from the tab bar, so its
+  sub-routes (player / accounts / nuvio / cloudstream / stremio /
+  developer) keep working unchanged. When Settings is open no tab is
+  highlighted (it is not one of the 5).
+- The "Detail" tab shows the detail page of the MOST RECENTLY watched
+  item (watch history, most recent by timestamp) — the same screen a
+  poster tap opens — with the floating pill nav still visible, exactly
+  as the preview shows the Detail screen above the tab bar. If nothing
+  has been watched yet it shows an empty state ("Abhi kuch dekha nahi")
+  with a gold "Home kholo" button. Note: the back arrow inside the
+  detail page is a no-op on this tab (it is the root of its branch, so
+  there is nothing to pop); the pill nav is the way out.
+- Labels "Plugins" and "Detail" are hardcoded English strings in the
+  nav/sidebar (no l10n key exists for them); Home / Search / Library
+  keep using the localized strings. Tab icons: home, search, extension
+  (puzzle), video_library, settings-gear — the gear is the preview's
+  own icon for the Detail tab.
 - Active tab: icon + label in gold `#D4AF37`, icon wrapped in a gold-soft pill
   (`rgba(212,175,55,.16)`, radius 12, padding `3px 10px`).
 - Inactive tab: icon + label in `#9D9A92`.
@@ -146,3 +167,20 @@ spec is about colour, layout and shape, not the typeface.
   player features only.
 - The preview's mock content (The Odyssey, fake posters, fake provider
   names) is NOT real data — the app shows the provider's real catalogue.
+
+## Honest differences (v3, tab restructure)
+
+- The preview's Detail screen is a mock of ONE item ("The Odyssey"). The
+  app's Detail tab shows the most recently watched item's real detail
+  page instead — there is no single "the" detail in a real app. If
+  nothing was watched yet, it shows an empty state.
+- The preview shows the Explore tab nowhere — the app had an Explore tab.
+  Per the user's explicit instruction ("home search plugin library
+  detail sab esa hi") Explore was removed from the shell. The Explore
+  screen file still exists but is no longer reachable; its data
+  providers are still used by other screens (addons / details).
+- Settings has no tab (the preview has none either). It is a 6th shell
+  branch, opened from the gear button in the Home AppBar. When Settings
+  is open, no bottom-nav tab is highlighted.
+- The preview's Detail tab uses a gear icon. Kept as-is (faithful to the
+  approved design), even though a gear normally means Settings.

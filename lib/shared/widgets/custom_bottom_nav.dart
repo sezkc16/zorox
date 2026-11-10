@@ -38,9 +38,11 @@ class CustomBottomNavBar extends StatelessWidget {
         label: localizations.search,
       ),
       _BottomNavDestination(
-        icon: Icons.explore_outlined,
-        selectedIcon: Icons.explore,
-        label: localizations.explore,
+        icon: Icons.extension_outlined,
+        selectedIcon: Icons.extension,
+        // Preview tab name (no l10n key for it): the user approved
+        // "Plugins" — the Extensions screen (TojiX repo + providers).
+        label: 'Plugins',
       ),
       _BottomNavDestination(
         icon: Icons.video_library_outlined,
@@ -50,7 +52,10 @@ class CustomBottomNavBar extends StatelessWidget {
       _BottomNavDestination(
         icon: Icons.settings_outlined,
         selectedIcon: Icons.settings,
-        label: localizations.settings,
+        // Preview tab name (no l10n key for it): the user approved
+        // "Detail". The gear icon is the preview's own icon for this
+        // tab; it opens the most recently watched item's detail page.
+        label: 'Detail',
       ),
     ];
 

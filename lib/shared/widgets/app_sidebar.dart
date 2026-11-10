@@ -135,12 +135,16 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
     // Watch the global D-pad mode provider
     final isDpadMode = ref.watch<bool>(isDpadActiveProvider);
 
+    // ZoroX (approved design preview): the nav is exactly
+    // Home / Search / Plugins / Library / Detail. Settings is a 6th
+    // shell branch (reachable from the Home AppBar gear), so it is
+    // not one of the 5 sidebar destinations.
     final destinations = [
       (Icons.home_outlined, Icons.home, l10n.home),
       (Icons.search, Icons.search, l10n.search),
-      (Icons.explore_outlined, Icons.explore, l10n.explore),
+      (Icons.extension_outlined, Icons.extension, 'Plugins'),
       (Icons.video_library_outlined, Icons.video_library, l10n.library),
-      (Icons.settings_outlined, Icons.settings, l10n.settings),
+      (Icons.settings_outlined, Icons.settings, 'Detail'),
     ];
     assert(
       destinations.length == kSidebarDestinationCount,
