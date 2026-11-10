@@ -79,15 +79,30 @@ class CustomBottomNavBar extends StatelessWidget {
           child: SizedBox(
             width: fullWidth,
             height: height,
-            child: MatteGlassPill(
-              // Most of the theme's surface, not a tint: over the brightest
-              // and darkest posters the icons keep 3:1 (WCAG 1.4.11) - 7.4:1
-              // on the dark theme, 3.7:1 on the light - where a 22% glass
-              // left them at 1.1:1 and 1.8:1.
-              surfaceColor: colorScheme.surface.withValues(alpha: 0.8),
-              child: Material(
-                type: MaterialType.transparency,
-                child: Row(children: tabs),
+            // Preview spec: 1px #2E2E33 border + soft drop shadow so the
+            // pill reads as floating above the content.
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: const Color(0xFF2E2E33)),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color.fromRGBO(0, 0, 0, 0.5),
+                    blurRadius: 30,
+                    offset: Offset(0, 12),
+                  ),
+                ],
+              ),
+              child: MatteGlassPill(
+                // Most of the theme's surface, not a tint: over the brightest
+                // and darkest posters the icons keep 3:1 (WCAG 1.4.11) - 7.4:1
+                // on the dark theme, 3.7:1 on the light - where a 22% glass
+                // left them at 1.1:1 and 1.8:1.
+                surfaceColor: colorScheme.surface.withValues(alpha: 0.8),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Row(children: tabs),
+                ),
               ),
             ),
           ),
@@ -118,6 +133,21 @@ class _NavTabCellState extends State<_NavTabCell> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    // Preview spec: unselected tab #9D9A92, selected tab gold.
+    final inactiveColor =
+        Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF9D9A92)
+            : colorScheme.onSurfaceVariant;
+    final itemColor = widget.isSelected
+        ? colorScheme.primary
+        : inactiveColor;
+    final icon = Icon(
+      widget.isSelected
+          ? widget.destination.selectedIcon
+          : widget.destination.icon,
+      color: itemColor,
+      size: 24,
+    );
 
     return Semantics(
       button: true,
@@ -146,14 +176,41 @@ class _NavTabCellState extends State<_NavTabCell> {
             onFocusChange: (focused) => setState(() => _isFocused = focused),
             onTap: widget.onTap,
             child: Center(
-              child: Icon(
-                widget.isSelected
-                    ? widget.destination.selectedIcon
-                    : widget.destination.icon,
-                color: widget.isSelected
-                    ? colorScheme.primary
-                    : colorScheme.onSurfaceVariant,
-                size: 24,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Active tab: gold-soft pill behind the icon (preview .tic),
+                  // so the selected tab reads at a glance, not just by colour.
+                  if (widget.isSelected)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: icon,
+                    )
+                  else
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 3,
+                      ),
+                      child: icon,
+                    ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.destination.label,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: itemColor,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

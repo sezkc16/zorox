@@ -12,7 +12,11 @@ import 'network_buffer.dart';
 
 /// libVLC's start threshold for video on demand: files, HLS, DASH and LAN
 /// servers. HLS and DASH ignore it; libVLC fixes their delay at 1 s.
-const int kVodCachingMs = 1000;
+///
+/// ZoroX v3: 10 s (was 1 s) so a ±10 s double-tap seek lands inside the
+/// buffer and plays instantly instead of re-buffering — the Infuse-like
+/// pre-buffer the design asks for. Costs a little start-up latency.
+const int kVodCachingMs = 10000;
 
 /// The same for live TS, UDP, RTP and RTSP. A feed can't read ahead, so it
 /// gets half a second more slack for jitter.

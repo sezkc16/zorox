@@ -40,16 +40,16 @@ class AppTheme {
     });
   }
 
-  // Premium Colors
-  static const Color background = Color(0xFF0F0F13); // Deep dark blue-grey
-  static const Color surface = Color(0xFF18181F);
-  static const Color surfaceHighlight = Color(0xFF22222E);
+  // Premium Colors — ZoroX Gold & Black (see ZOROX_DESIGN_SPEC.md).
+  static const Color background = Color(0xFF0A0A0B); // Obsidian
+  static const Color surface = Color(0xFF161618); // Cards
+  static const Color surfaceHighlight = Color(0xFF26262A);
   static const Color primary = Color(0xFFD4AF37); // Gold Accent
   static const Color primaryVariant = Color(0xFFB8860B); // Gold Accent Darker
   static const Color secondary = Color(0xFF10B981); // Emerald
   static const Color error = Color(0xFFEF4444);
-  static const Color onSurface = Color(0xFFE5E7EB);
-  static const Color textSecondary = Color(0xFF9CA3AF);
+  static const Color onSurface = Color(0xFFF5F2EA); // Warm White
+  static const Color textSecondary = Color(0xFFA7A49B); // Muted
 
   // Light Theme Colors
   static const Color lightBackground = Color(0xFFF5F1EC); // primary surface
@@ -125,41 +125,41 @@ class AppTheme {
         ColorScheme.fromSeed(
           seedColor: const Color(0xFFD4AF37), // Gold Accent seed
           brightness: Brightness.dark,
-          surface: const Color(0xFF000000), // Default surface
+          surface: const Color(0xFF161618), // Cards
         );
 
-    // Ensure surface is always Pitch Black for list items/cards
-    colorScheme = colorScheme.copyWith(surface: const Color(0xFF000000));
+    // Cards / list items in the design's surface colour.
+    colorScheme = colorScheme.copyWith(surface: const Color(0xFF161618));
 
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
       fontFamily: fontFamily,
       scaffoldBackgroundColor: const Color(
-        0xFF000000,
-      ), // Pure Black Background for Screens
+        0xFF0A0A0B,
+      ), // Obsidian Background for Screens
       // Dialog Theme (Premium Grey)
       dialogTheme: const DialogThemeData(
-        backgroundColor: Color(0xFF18181F),
+        backgroundColor: Color(0xFF17171A),
         surfaceTintColor: Colors.transparent,
         titleTextStyle: TextStyle(
           fontFamily: fontFamily,
           fontSize: 20,
           fontWeight: FontWeight.w600,
-          color: Color(0xFFF9FAFB),
+          color: Color(0xFFF5F2EA),
         ),
       ),
 
       // Bottom Sheet Theme (Premium Grey)
       bottomSheetTheme: const BottomSheetThemeData(
-        backgroundColor: Color(0xFF18181F),
+        backgroundColor: Color(0xFF17171A),
         surfaceTintColor: Colors.transparent,
-        modalBackgroundColor: Color(0xFF18181F),
+        modalBackgroundColor: Color(0xFF17171A),
       ),
 
-      // Card Theme (Pitch Black for List Items)
+      // Card Theme (Surface for List Items)
       cardTheme: const CardThemeData(
-        color: Color(0xFF000000),
+        color: Color(0xFF161618),
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -176,70 +176,70 @@ class AppTheme {
               fontFamily: fontFamily,
               fontSize: 32,
               fontWeight: FontWeight.bold,
-              color: Color(0xFFF9FAFB),
+              color: Color(0xFFF5F2EA),
             ),
             displayMedium: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 28,
               fontWeight: FontWeight.bold,
-              color: Color(0xFFF9FAFB),
+              color: Color(0xFFF5F2EA),
             ),
             displaySmall: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 24,
               fontWeight: FontWeight.bold,
-              color: Color(0xFFF9FAFB),
+              color: Color(0xFFF5F2EA),
             ),
             headlineMedium: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 24,
               fontWeight: FontWeight.w600,
-              color: Color(0xFFF9FAFB),
+              color: Color(0xFFF5F2EA),
             ),
             titleLarge: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 20,
               fontWeight: FontWeight.w600,
-              color: Color(0xFFF9FAFB),
+              color: Color(0xFFF5F2EA),
             ),
             titleMedium: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 16,
               fontWeight: FontWeight.w600,
-              color: Color(0xFFF9FAFB),
+              color: Color(0xFFF5F2EA),
             ),
             bodyLarge: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 16,
-              color: Color(0xFFE5E7EB),
+              color: Color(0xFFF5F2EA),
             ),
             bodyMedium: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 14,
-              color: Color(0xFF9CA3AF),
+              color: Color(0xFFA7A49B),
             ),
             // WCAG AA (4.5:1) for 12 sp body text, which is the settings
             // subtitle stating the current value of every setting. The old
             // 0xFF6B7280 measured 4.34:1 on the pure-black scaffold and only
-            // 3.65:1 on the 0xFF18181F dialog and bottom sheet; this is the
+            // 3.65:1 on the 0xFF17171A dialog and bottom sheet; this is the
             // same slate lifted 15% and clears both (5.51:1 and 4.63:1).
             bodySmall: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 12,
-              color: Color(0xFF7B8393),
+              color: Color(0xFFA7A49B),
             ),
             labelLarge: const TextStyle(
               fontFamily: fontFamily,
               fontSize: 14,
               fontWeight: FontWeight.w600,
               letterSpacing: 0.1,
-              color: Color(0xFFF9FAFB),
+              color: Color(0xFFF5F2EA),
             ),
           ),
 
       // AppBar
       appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFF000000),
+        backgroundColor: Color(0xFF0A0A0B),
         elevation: 0,
         centerTitle: false,
         scrolledUnderElevation: 0,
@@ -249,7 +249,7 @@ class AppTheme {
       // Bottom Navigation
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
         backgroundColor: const Color(
-          0xFF000000,
+          0xFF0A0A0B,
         ), // Pure Black matches background
         selectedItemColor: colorScheme.primary,
         unselectedItemColor: colorScheme.onSurfaceVariant,
@@ -267,17 +267,17 @@ class AppTheme {
       // Input Decoration
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: const Color(0xFF18181F), // Slightly lighter grey for fields
+        fillColor: const Color(0xFF17171A), // Slightly lighter grey for fields
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(13),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(13),
           borderSide: BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(13),
           borderSide: BorderSide(color: colorScheme.primary, width: 2),
         ),
         contentPadding: const EdgeInsets.symmetric(
@@ -286,11 +286,11 @@ class AppTheme {
         ),
       ),
 
-      dividerColor: const Color(0xFF22222E),
+      dividerColor: const Color(0xFF1E1E21),
       dividerTheme: const DividerThemeData(
         thickness: 1,
         space: 1,
-        color: Color(0xFF22222E),
+        color: Color(0xFF1E1E21),
       ),
 
       // One focus indicator for every Material control. See

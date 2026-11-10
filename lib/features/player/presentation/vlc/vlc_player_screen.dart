@@ -827,6 +827,15 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// texture platforms this is the value that does the work.
   late VlcVideoFit _fit;
 
+  /// Pinch-to-zoom scale on the video (ZoroX v3): two fingers scale the
+  /// picture 1.0–3.0 on top of [_fit], like MX Player / VLC. Reset to 1.0
+  /// whenever a new media opens (see [_openAttempt] and [_park]).
+  double _videoScale = 1.0;
+
+  /// The [_videoScale] at the start of the current pinch, so a new gesture
+  /// multiplies from where the last one left off instead of jumping to 1.0.
+  double _scaleStart = 1.0;
+
   /// The source sheet's own context while it is open, so Back has something to
   /// close. Null whenever the video is the only thing on screen.
   BuildContext? _sheetContext;
@@ -1066,6 +1075,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           // media carries its own interval, and its read-ahead from the
           // buffer rule: see playbackMediaOptions.
           networkCaching: kVodCachingMs,
+          // Instance-level read-ahead (64 MiB): the prefetch ring libVLC
+          // reads ahead of the demuxer, so a double-tap seek has data
+          // waiting instead of re-fetching. A per-media :prefetch-buffer-size
+          // from the buffer plan still overrides this.
+          prefetchBufferKiB: 65536,
           userAgent: kDefaultBrowserUserAgent,
           // HLS and DASH Auto follow the link: the highest rendition allowed
           // for three segments, then down as the buffer drains and up as it
@@ -1739,6 +1753,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // about this one's; a reopen of this one keeps it.
     if (stream.url != _lastStreamUrl) _liveSegment = null;
     _lastStreamUrl = stream.url;
+    // A new media starts un-zoomed (pinch-to-zoom, ZoroX v3).
+    _videoScale = 1.0;
     _isLive = isLiveSource(widget.item, stream.url);
     final languageOption = _audioLanguageOption();
     // How far ahead this media reads (spec 1.2): from its bitrate, the
@@ -2533,6 +2549,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // the viewer's play of the parked media: none counts until the park has
     // handed the new media over, as an open's own setup does.
     _handedToEngine = false;
+    // A parked reopen starts un-zoomed too (pinch-to-zoom, ZoroX v3).
+    _videoScale = 1.0;
     try {
       await _controller.setMedia(
         VlcMediaSource(
@@ -5424,13 +5442,32 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
               offstage:
                   PlayerDiagnostics.suppressVideoSurface ||
                   _stage != _Stage.playing,
-              child: VlcPlayer(
-                key: ValueKey<int>(_playerMount),
-                controller: _controller,
-                fit: _fit,
-                darwinRenderer: playerDarwinRenderer,
-                androidRenderer: playerAndroidRenderer,
-                backgroundColor: playerBackdropColor,
+              // Pinch-to-zoom (ZoroX v3): two fingers scale the picture on
+              // top of the fit. onScaleUpdate only claims a two-finger
+              // gesture, so single taps still reach the controls above.
+              child: GestureDetector(
+                onScaleStart: (_) => _scaleStart = _videoScale,
+                onScaleUpdate: (details) {
+                  // clamp() returns num; toDouble() keeps _videoScale a
+                  // double — assigning num to it would not compile.
+                  final double scale =
+                      (_scaleStart * details.scale).clamp(1.0, 3.0).toDouble();
+                  if (scale != _videoScale) {
+                    setState(() => _videoScale = scale);
+                  }
+                },
+                child: Transform.scale(
+                  scale: _videoScale,
+                  alignment: Alignment.center,
+                  child: VlcPlayer(
+                    key: ValueKey<int>(_playerMount),
+                    controller: _controller,
+                    fit: _fit,
+                    darwinRenderer: playerDarwinRenderer,
+                    androidRenderer: playerAndroidRenderer,
+                    backgroundColor: playerBackdropColor,
+                  ),
+                ),
               ),
             ),
             // Subtitle files, drawn over the picture rather than into it, so

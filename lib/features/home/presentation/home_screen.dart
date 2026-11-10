@@ -360,6 +360,41 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           child: CustomScrollView(
             controller: _scrollController,
             slivers: [
+              // Greeting (preview) — above the hero on mobile.
+              if (!isWidescreen)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      LayoutConstants.spacingMd,
+                      MediaQuery.of(context).padding.top + kToolbarHeight + 8,
+                      LayoutConstants.spacingMd,
+                      4,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Namaste, Suresh',
+                          style: TextStyle(
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurfaceVariant,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Aaj kya dekhna hai?',
+                          style: Theme.of(context).textTheme.headlineSmall
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 21,
+                              ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               if (data.containsKey('Trending'))
                 SliverToBoxAdapter(
                   child: ExploreCarousel(
@@ -498,46 +533,182 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
   }
 
+  /// No provider yet: the preview's provider-first home, not the bare
+  /// "Select a provider" screen — greeting, the provider card, and a chip
+  /// for every installed provider, so the home is never empty.
+  ///
+  /// The two labels are the preview's own Hinglish ("Abhi wala provider",
+  /// "Badlo ›") — there is no l10n key for them and the mock the user
+  /// approved uses exactly these words.
   Widget _buildNoProviderState(
     BuildContext context,
     AppLocalizations l10n, {
     bool isWidescreen = false,
   }) {
-    return Center(
+    final cs = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(
+        LayoutConstants.spacingMd,
+        isWidescreen
+            ? 8
+            : MediaQuery.of(context).padding.top + kToolbarHeight + 8,
+        LayoutConstants.spacingMd,
+        LayoutConstants.shellBottomContentPadding(context),
+      ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.extension_off_rounded,
-            size: 64,
-            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+          // Greeting (preview).
+          Text(
+            'Namaste, Suresh',
+            style: TextStyle(
+              color: cs.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Aaj kya dekhna hai?',
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              fontSize: 21,
+            ),
+          ),
+          const SizedBox(height: 14),
+          // Provider card (preview): current provider + "Badlo".
+          Consumer(
+            builder: (context, ref, _) {
+              final active = ref.watch(activeProviderProvider);
+              final name = active?.name ?? l10n.none;
+              return CardsWrapper(
+                onTap: () => _showProviderSelector(context, ref),
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: cs.outline.withValues(alpha: 0.1),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: cs.primary.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          name.isEmpty ? '?' : name[0].toUpperCase(),
+                          style: TextStyle(
+                            color: cs.primary,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Abhi wala provider',
+                              style: TextStyle(
+                                color: cs.onSurfaceVariant,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.05,
+                              ),
+                            ),
+                            Text(
+                              name,
+                              style: const TextStyle(
+                                fontSize: 15.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        'Badlo ›',
+                        style: TextStyle(
+                          color: cs.primary,
+                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          // Provider chips (preview): every installed provider, gold = active.
+          Consumer(
+            builder: (context, ref, _) {
+              // Rebuild when installs change; the provider list itself comes
+              // from the extension manager, the same source as the selector.
+              ref.watch(extensionsControllerProvider);
+              final active = ref.watch(activeProviderProvider);
+              final providers =
+                  List<SkyStreamProvider>.from(
+                    ref
+                        .read(extensionManagerProvider.notifier)
+                        .getAllProviders(),
+                  )..sort(
+                    (a, b) =>
+                        a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+                  );
+              if (providers.isEmpty) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      l10n.noPluginsMessage,
+                      style: TextStyle(color: cs.onSurfaceVariant),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () =>
+                          const ExtensionsRoute().push<void>(context),
+                      icon: const Icon(Icons.extension_rounded),
+                      label: Text(l10n.goToExtensions),
+                    ),
+                  ],
+                );
+              }
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final p in providers) ...[
+                      _ProviderChip(
+                        label: p.name,
+                        selected: active?.packageName == p.packageName,
+                        onTap: () {
+                          ref.read(activeProviderProvider.notifier).set(p);
+                          ref.invalidate(homeDataProvider);
+                        },
+                      ),
+                      const SizedBox(width: 7),
+                    ],
+                  ],
+                ),
+              );
+            },
           ),
           const SizedBox(height: 16),
           Text(
-            l10n.selectProviderToStart,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            l10n.tapExtensionIcon,
+            style: TextStyle(color: cs.onSurfaceVariant),
           ),
-          const SizedBox(height: 8),
-          if (isWidescreen) ...[
-            const SizedBox(height: 8),
-            FilledButton.icon(
-              onPressed: () => _showProviderSelector(context, ref),
-              icon: const Icon(Icons.extension_rounded),
-              label: const Text('Select Provider'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 14,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(
-                    LayoutConstants.radiusPill,
-                  ),
-                ),
-              ),
-            ),
-          ] else
-            Text(l10n.tapExtensionIcon),
         ],
       ),
     );
@@ -771,6 +942,51 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ),
         ),
       ],
+    );
+  }
+}
+
+/// A provider chip in the preview's style: dark pill, gold when selected.
+class _ProviderChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ProviderChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      color: selected ? cs.primary : cs.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(999),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: selected
+                  ? cs.primary
+                  : cs.outline.withValues(alpha: 0.1),
+            ),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w700,
+              color: selected ? cs.onPrimary : cs.onSurface,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
