@@ -1,0 +1,72 @@
+# ZoroX — unsigned iOS IPA build for sideloading (ESign / SideStore).
+#
+# Based on upstream SkyStream's release.yml iOS job, simplified:
+# no API-key secrets, no GitHub Release — the IPA is uploaded as a
+# workflow artifact. No code signing anywhere: the IPA is unsigned and
+# the user signs it with ESign, exactly like the MLBB IPA.
+#
+# Trigger: every push to master, or manual Run workflow.
+# The app is built with the same Flutter version upstream pins (3.47.7).
+
+name: Build ZoroX iOS (Unsigned IPA)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.47.7
+
+jobs:
+  ios:
+    name: iOS Build (Unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select Latest Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install Dependencies
+        run: |
+          flutter pub get
+          flutter gen-l10n
+          dart run build_runner build --delete-conflicting-outputs
+
+      # Desktop TorrServer binaries (~104 MB) cannot run on iOS; iOS runs
+      # TorrServer from its own native ios/TorrServer.xcframework instead.
+      - name: Strip Desktop Binaries
+        run: rm -f packages/flutter_torrent_server/assets/torrserver/TorrServer-*
+
+      # No dart-defines file: the fork has no TMDB/Trakt/SIMKL API secrets,
+      # so those integrations run without keys (they degrade gracefully).
+      # Add the secrets to the fork and generate dart-defines.json to enable
+      # them — see ZOROX_NOTES.md.
+      - name: Build iOS (No Codesign)
+        run: |
+          flutter build ios --release --no-codesign
+          mkdir -p Payload
+          mv build/ios/iphoneos/Runner.app Payload/
+          VERSION=$(grep '^version:' pubspec.yaml | cut -d ' ' -f 2 | cut -d '+' -f 1)
+          zip -r "ZoroX-${VERSION}-unsigned.ipa" Payload
+          ls -lh *.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoroX-iOS-unsigned
+          path: ZoroX-*-unsigned.ipa
+          retention-days: 30

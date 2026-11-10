@@ -1,4 +1,4 @@
-package dev.akash.skystream
+package com.toji.zorox
 
 import android.annotation.SuppressLint
 import android.content.ComponentName

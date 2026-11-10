@@ -1,4 +1,4 @@
-package dev.akash.skystream
+package com.toji.zorox
 
 import android.content.Intent
 import android.content.pm.PackageManager

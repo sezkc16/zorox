@@ -400,7 +400,7 @@ class _MyAppState extends ConsumerState<MyApp> {
 
     final reports = await Future.wait(<Future<ExtensionUpdateReport>>[
       _updating(
-        'SkyStream plugins',
+        'ZoroX plugins',
         () => ref.read(extensionsControllerProvider.notifier).autoUpdate(),
       ),
       _updating(
@@ -530,7 +530,7 @@ class _MyAppState extends ConsumerState<MyApp> {
           scaffoldMessengerKey: ref
               .read(notificationServiceProvider)
               .messengerKey,
-          title: 'SkyStream',
+          title: 'ZoroX',
           debugShowCheckedModeBanner: false,
           themeMode: themeMode,
           theme: lightDynamic != null
@@ -612,7 +612,7 @@ class _MyAppState extends ConsumerState<MyApp> {
           rootWidget = PlatformMenuBar(
             menus: <PlatformMenuItem>[
               PlatformMenu(
-                label: 'SkyStream',
+                label: 'ZoroX',
                 menus: <PlatformMenuItem>[
                   if (PlatformProvidedMenuItem.hasMenu(
                     PlatformProvidedMenuItemType.about,

@@ -26,7 +26,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
-        android:label="SkyStream"
+        android:label="ZoroX"
         android:name="dev.akash.cs3engine.android.ExtensionHostApplication"
         android:icon="@mipmap/ic_launcher"
         android:banner="@drawable/banner"

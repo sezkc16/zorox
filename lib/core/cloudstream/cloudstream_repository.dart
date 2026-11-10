@@ -224,6 +224,30 @@ class CloudStreamRepository extends _$CloudStreamRepository {
     _host.setSwitchedOff(!state.enabled);
     _publish();
     _syncRepositories();
+    // ZoroX: first launch with no repositories yet - pre-add the owner's
+    // repository, so its plugins are there from the start.
+    unawaited(_seedDefaultRepository());
+  }
+
+  /// ZoroX's default CloudStream repository (the owner's own repo).
+  /// Seeded once, on a launch where no repository is stored yet. Never
+  /// re-added after the user removed it (see [removedReposKey]), and retried
+  /// on the next launch if the network was down when first tried.
+  static const String _defaultRepositoryUrl =
+      'https://raw.githubusercontent.com/sezkc16/katdrama/builds/plugins.json';
+
+  Future<void> _seedDefaultRepository() async {
+    await _loaded;
+    if (!ref.mounted) return;
+    if (state.repositories.isNotEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final removed = prefs.getStringList(removedReposKey) ?? const [];
+    if (removed.contains(_defaultRepositoryUrl)) return;
+    try {
+      await addRepository(_defaultRepositoryUrl);
+    } catch (error) {
+      talker.warning('[CloudStream] default repository did not load: $error');
+    }
   }
 
   Future<List<CsRepository>> _readRepositories(SharedPreferences prefs) async {
