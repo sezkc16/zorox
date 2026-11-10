@@ -179,7 +179,12 @@ final class VlcPictureInPictureController: NSObject {
     guard let layer = displayLayer, layer.isReadyForMoreMediaData else {
       return false
     }
-    guard let pixelBuffer = player?.textureRenderer?.copyPixelBuffer() else {
+    // copyPixelBuffer() follows the Create Rule ("copy" in the name): it
+    // hands back a +1 retained reference, so takeRetainedValue() both
+    // unwraps the Unmanaged and balances the retain (takeUnretainedValue
+    // would leak one reference per frame).
+    guard let pixelBuffer = player?.textureRenderer?.copyPixelBuffer()?
+      .takeRetainedValue() else {
       return false
     }
     let width = CVPixelBufferGetWidth(pixelBuffer)
@@ -315,12 +320,16 @@ extension VlcPictureInPictureController: AVPictureInPictureSampleBufferPlaybackD
     }
   }
 
+  // NOTE: the label is `completion:`, not `completionHandler:` — the SDK
+  // renamed it, and the old label no longer matches the protocol (Xcode
+  // 26: "has been renamed to 'pictureInPictureController(_:skipByInterval:
+  // completion:)'" and the type then fails to conform).
   func pictureInPictureController(
     _ pictureInPictureController: AVPictureInPictureController,
     skipByInterval skipInterval: CMTime,
-    completionHandler: @escaping () -> Void
+    completion: @escaping () -> Void
   ) {
     player?.pipSkip(by: skipInterval.seconds)
-    completionHandler()
+    completion()
   }
 }
