@@ -28,10 +28,11 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Install Android SDK and NDK
+      - name: Configure Android SDK
         run: |
-          sdkmanager --licenses > /dev/null
-          sdkmanager "platforms;android-37.0" "build-tools;36.0.0" "ndk;29.0.14206865"
+         echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+         flutter doctor -v
+         flutter doctor --android-licenses || true
 
       - name: Get Flutter dependencies
         run: flutter pub get
