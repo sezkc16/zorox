@@ -18,7 +18,6 @@
 library;
 
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -40,7 +39,7 @@ class SideCarSubtitleView extends StatefulWidget {
     required this.controller,
     required this.subtitles,
     required this.settings,
-    this.bottomInset = 0,
+    this.picture,
     super.key,
   });
 
@@ -48,10 +47,14 @@ class SideCarSubtitleView extends StatefulWidget {
   final SideCarSubtitles subtitles;
   final PlayerSettings settings;
 
-  /// Room to leave along the bottom - the controls, while they are up - so a
-  /// line is lifted over them rather than drawn under them. A change slides
-  /// the lines rather than jumping them.
-  final double bottomInset;
+  /// The picture's on-screen rect, in the same coordinates as the player
+  /// area this view is laid out over — null when it cannot be measured.
+  /// The lines sit at the same place the embedded track's do (see
+  /// [subtitleTargetY]): a small fixed margin above the picture's bottom
+  /// edge, never lifted over the bottom controls, so they never move when
+  /// the controls show or hide. Null falls back to the edge margin plus
+  /// the viewer's lift above the area's bottom.
+  final Rect? picture;
 
   @override
   State<SideCarSubtitleView> createState() => _SideCarSubtitleViewState();
@@ -155,6 +158,17 @@ class _SideCarSubtitleViewState extends State<SideCarSubtitleView> {
         if (cue.placement == placement) _cue(cue, style, fontSize),
     ];
 
+    // The lines' bottom edge: the same target the embedded track is
+    // anchored to — see [subtitleTargetY] — so a file and a track inside
+    // the video sit at the same place. When the picture cannot be measured
+    // the rest above; never the bottom chrome, so the lines never move
+    // when the controls show or hide.
+    final picture = widget.picture;
+    final bottomOffset = picture == null || picture.isEmpty
+        ? rest
+        : area.height -
+              subtitleTargetY(area, picture, widget.settings.subtitleRaise);
+
     // Where two lines are due together the earlier one keeps its place and
     // the later one stacks away from the edge, as libass lays them out.
     final bottom = band(SubtitlePlacement.bottom).reversed.toList();
@@ -175,9 +189,7 @@ class _SideCarSubtitleViewState extends State<SideCarSubtitleView> {
           AnimatedPositioned(
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeOut,
-            // The higher of the two, never their sum: a lift already clear
-            // of the controls stays where it is when they come up.
-            bottom: math.max(rest, widget.bottomInset + margin / 2),
+            bottom: bottomOffset,
             left: side,
             right: side,
             child: _column(bottom),

@@ -653,7 +653,7 @@ void main() {
 
     Future<void> pumpView(
       WidgetTester tester, {
-      double bottomInset = 0,
+      Rect? picture,
       PlayerSettings settings = const PlayerSettings(),
       SideCarSubtitles? files,
     }) async {
@@ -667,7 +667,7 @@ void main() {
               controller: controller,
               subtitles: files ?? subtitles,
               settings: settings,
-              bottomInset: bottomInset,
+              picture: picture,
             ),
           ),
         ),
@@ -932,16 +932,25 @@ void main() {
       expect(text.textSpan!.style!.fontSize, expected);
     });
 
-    testWidgets('lifts bottom lines over the controls, and puts a top line '
-        'at the top', (tester) async {
+    testWidgets('bottom lines sit at the picture\'s bottom margin, and a '
+        'top line at the top', (tester) async {
       await at(6000);
       await pumpView(tester);
       final low = tester.getBottomLeft(find.text('First').last).dy;
 
-      await pumpView(tester, bottomInset: 108);
+      // A letterboxed picture: the lines rise to its bottom edge. The
+      // picture ends 60 px above the area, and its margin (6% of its own
+      // 600 px height) is 7.2 px smaller than the area's, so the rise is
+      // 60 - 7.2 px.
+      await pumpView(
+        tester,
+        picture: const Rect.fromLTWH(0, 60, 1280, 600),
+      );
       await tester.pump(const Duration(milliseconds: 300));
-      final lifted = tester.getBottomLeft(find.text('First').last).dy;
-      expect(lifted, lessThan(low - 80));
+      expect(
+        tester.getBottomLeft(find.text('First').last).dy,
+        closeTo(low - (60 - (720 * 0.06 - 600 * 0.06)), 0.01),
+      );
 
       await at(11000);
       await tester.pump();
@@ -995,7 +1004,7 @@ void main() {
     });
 
     testWidgets('lifts bottom lines by the share of the picture asked for, '
-        'and the controls still lift them further', (tester) async {
+        'and a letterboxed picture lifts them to its own bottom', (tester) async {
       await at(6000);
       await pumpView(tester);
       final low = tester.getBottomLeft(find.text('First').last).dy;
@@ -1011,18 +1020,19 @@ void main() {
         closeTo(low - 72, 0.01),
       );
 
-      // The bars' 108 px and half a margin beat the lift's: the larger of
-      // the two, never their sum.
+      // The same lift, measured from a letterboxed picture's bottom edge:
+      // the picture ends 60 px above the area, the lift is a tenth of its
+      // 600 px height, and its margin is 7.2 px smaller than the area's —
+      // so the rise from the unlifted, unframed line is 60 + 60 - 7.2 px.
       await pumpView(
         tester,
-        bottomInset: 108,
+        picture: const Rect.fromLTWH(0, 60, 1280, 600),
         settings: const PlayerSettings(subtitleRaise: 0.1),
       );
       await tester.pump(const Duration(milliseconds: 300));
-      const margin = 720 * 0.06;
       expect(
         tester.getBottomLeft(find.text('First').last).dy,
-        closeTo(low - (108 + margin / 2 - margin), 0.01),
+        closeTo(low - (60 + 60 - (720 * 0.06 - 600 * 0.06)), 0.01),
       );
     });
 

@@ -205,7 +205,6 @@ void main() {
       Size frame = video,
       VlcVideoFit fit = VlcVideoFit.contain,
       double pinchScale = 1.0,
-      double bottomInset = 0,
     }) => subtitleLookAnchored(
       settings,
       createdRelativeSize: 24,
@@ -213,11 +212,24 @@ void main() {
       video: frame,
       fit: fit,
       pinchScale: pinchScale,
-      bottomInset: bottomInset,
     );
 
     test('a picture that is the screen reads as the plain look', () {
       final look = anchored();
+      expect(look.textScale, 100);
+      expect(look.raise, closeTo(0.06, 1e-9));
+    });
+
+    test('a 16:9 picture on a landscape phone sits low, not a bar above it', () {
+      // The report: v13 anchored the target to the bottom chrome's height,
+      // which floated the lines a full bar above the picture even with the
+      // controls down — a raise of 0.28 on this frame. The target is the
+      // picture's own bottom edge now, so the raise is the edge margin
+      // alone, the normal Netflix place.
+      final look = anchored(
+        area: const Size(932, 430),
+        frame: const Size(1920, 1080),
+      );
       expect(look.textScale, 100);
       expect(look.raise, closeTo(0.06, 1e-9));
     });
@@ -237,10 +249,13 @@ void main() {
       expect(look.raise, closeTo(0.28, 1e-9));
     });
 
-    test('the chrome lifts the lines over the bar, not the size', () {
-      final look = anchored(bottomInset: 100);
-      expect(look.textScale, 100);
-      expect(look.raise, closeTo(0.28, 1e-9));
+    test('a pinch out keeps the lines at the picture\'s bottom margin', () {
+      // Half size, the picture's bottom is above the screen's: the lines
+      // keep the edge margin above the picture's own bottom, scaled with
+      // it, rather than dropping to the area's bottom.
+      final look = anchored(pinchScale: 0.5);
+      expect(look.textScale, 200);
+      expect(look.raise, closeTo(0.06, 1e-9));
     });
 
     test('the viewer\'s lift raises the anchor', () {
@@ -249,14 +264,6 @@ void main() {
       );
       expect(look.textScale, 100);
       expect(look.raise, closeTo(0.26, 1e-9));
-    });
-
-    test('a pinch out cannot push the lines below the picture', () {
-      // Half size, the picture's bottom is above the anchor: the raise
-      // bottoms out at 0 and the lines sit at the picture's bottom.
-      final look = anchored(pinchScale: 0.5);
-      expect(look.textScale, 200);
-      expect(look.raise, 0);
     });
 
     test('stretch reads as the plain look at the same size', () {

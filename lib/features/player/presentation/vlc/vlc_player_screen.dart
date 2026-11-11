@@ -68,7 +68,6 @@ import '../../domain/track_language.dart';
 import '../player_debug_flags.dart';
 import '../player_platform_service.dart';
 import '../subtitle_search_provider.dart' show subtitleLanguageProvider;
-import '../widgets/hotstar_player_style.dart';
 import 'chrome_visibility_controller.dart';
 import 'ended_card.dart';
 import 'next_episode_countdown.dart';
@@ -1251,11 +1250,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _chrome = ChromeVisibilityController(
       isPlaying: () => _controller.value.isPlaying,
     );
-    // The embedded subtitle's anchor follows the picture: a pinch, the
-    // chrome coming up, or a rotation moves the picture it is drawn into,
-    // so the look is recomputed with it — see [_reanchorSubtitles].
+    // The embedded subtitle's anchor follows the picture: a pinch or a
+    // rotation moves the picture it is drawn into, so the look is
+    // recomputed with it — see [_reanchorSubtitles]. The chrome is not in
+    // it: the lines never move when the controls show or hide, so the
+    // chrome needs no listener here.
     _videoScale.addListener(_onVideoScaleChanged);
-    _chrome.addListener(_reanchorSubtitles);
     _watchdog = Timer.periodic(_kWatchdogTick, (_) {
       _checkFirstFrame();
       _checkStall();
@@ -1327,9 +1327,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   }
 
   /// Re-anchors libVLC's subtitle lines to the screen after the picture
-  /// moved under them: a fit change, a pinch, the chrome coming up, a
-  /// rotation, a new video size. Nothing is sent when the look has not
-  /// changed.
+  /// moved under them: a fit change, a pinch, a rotation, a new video size.
+  /// Nothing is sent when the look has not changed.
   void _reanchorSubtitles() {
     if (_disposed) return;
     _restyleSubtitles(_playerSettings.value);
@@ -1345,8 +1344,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     );
   }
 
-  /// The look [settings] give libVLC's lines, anchored to the screen rather
-  /// than the picture: see [subtitleLookAnchored]. The geometry is only
+  /// The look [settings] give libVLC's lines, anchored to the picture's
+  /// bottom edge on screen: see [subtitleLookAnchored]. The geometry is only
   /// known once a picture is up — before that, and wherever it cannot be
   /// measured, the unanchored look, which is what a player took before.
   VlcSubtitleLook _anchoredSubtitleLook(PlayerSettings settings) {
@@ -1365,13 +1364,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       return plain;
     }
     if (screen.isEmpty) return plain;
-    // Fixed target: the lines sit at one place — just above where the
-    // bottom controls appear — whether or not the chrome is currently
-    // up. Letting the target follow the chrome (the controls' height
-    // while up, 0 while down) made the lines jump between two places
-    // every time the bars showed or hid, which the viewer reported as
-    // the subtitle shaking. When the bars are down the lines sit a
-    // little higher, with empty space below them; they never move.
+    // Fixed target: the lines sit at one place — just above the picture's
+    // bottom edge — whether or not the chrome is currently up. Anchoring
+    // to the bottom controls' height floated them a full bar above the
+    // picture even with the bars down, which the viewer reported as the
+    // subtitle sitting too high; letting the target follow the chrome made
+    // them jump every time the bars showed or hid, which was the shaking.
+    // The chrome height is not in the target at all, so the lines never
+    // move and never sit high.
     return subtitleLookAnchored(
       settings,
       createdRelativeSize: _createdRelativeSize,
@@ -1379,9 +1379,6 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       video: videoSize,
       fit: _fit,
       pinchScale: _videoScale.value,
-      bottomInset: HotstarPlayerStyle.bottomChromeHeightFor(
-        isTv: _form == PlayerFormFactor.tv,
-      ),
     );
   }
 
@@ -5898,7 +5895,6 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _checkTick?.cancel();
     // After the controls, which unmount first and stop listening; its hide
     // clock is still armed and nothing else would stop it.
-    _chrome.removeListener(_reanchorSubtitles);
     _chrome.dispose();
     // Same order and the same reason: the controls listen to it through a
     // ValueListenableBuilder and have already gone by here.
@@ -6108,8 +6104,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
             ),
             // Subtitle files, drawn over the picture rather than into it, so
             // the fit never reaches them - and in PiP as well, as libVLC's
-            // were. Lifted over the controls while those are up.
-            if (_stage == _Stage.playing) _sideCarSubtitles(isTv: isTv),
+            // were. They sit at the picture's bottom edge, like the embedded
+            // track's, and never move when the controls show or hide.
+            if (_stage == _Stage.playing) _sideCarSubtitles(),
             // Everything before a picture: getting links, checking them,
             // opening one - `setMedia` hands libVLC a URL and returns, so the
             // playing stage begins with the video widget an empty surface -
@@ -6261,22 +6258,24 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     );
   }
 
-  Widget _sideCarSubtitles({required bool isTv}) {
-    final controlsShown = !_inPip && _pictureUp && _ended == null;
+  Widget _sideCarSubtitles() {
     return Consumer(
       builder: (context, ref, _) {
         final settings =
             ref.watch(playerSettingsProvider).asData?.value ??
             const PlayerSettings();
-        return ValueListenableBuilder<bool>(
-          valueListenable: _chrome,
-          builder: (context, chromeUp, _) => SideCarSubtitleView(
+        // The picture's on-screen rect, so a file's lines sit at the same
+        // place the embedded track's do — see [subtitleTargetY]. The chrome
+        // is not in it: the lines never move when the controls show or hide.
+        // Rebuilt on the pinch scale, so a pinch moves the lines with the
+        // picture they are drawn over.
+        return ValueListenableBuilder<double>(
+          valueListenable: _videoScale,
+          builder: (context, _, _) => SideCarSubtitleView(
             controller: _controller,
             subtitles: _sideCars,
             settings: settings,
-            bottomInset: chromeUp && controlsShown
-                ? HotstarPlayerStyle.bottomChromeHeightFor(isTv: isTv)
-                : 0,
+            picture: _videoContentRect(),
           ),
         );
       },

@@ -152,10 +152,31 @@ Color _opaque(int argb) => Color(0xFF000000 | (argb & 0xFFFFFF));
 /// video sit at the same place.
 const double kSubtitleEdgeMargin = 0.06;
 
+/// The screen y (from the top of the player area) the subtitle lines'
+/// bottom edge sits at, for a picture whose on-screen rect is [picture] in
+/// an area [area] big: a small fixed margin above the picture's bottom
+/// edge, plus the viewer's lift — the normal Netflix/YouTube place. The
+/// margin is a share of the picture's own height, so it is the same low
+/// place in every fit and at every pinch zoom. When the picture's bottom is
+/// cropped below the area (cover zoom), the lines are kept on screen
+/// instead: no lower than the edge margin above the area's bottom, so they
+/// are never cut off. Fixed — it never follows the bottom chrome, so the
+/// lines never move when the controls show or hide. (v13 anchored the
+/// target to the chrome height and floated the lines a full bar above the
+/// picture even with the controls down.)
+double subtitleTargetY(Size area, Rect picture, double lift) {
+  final margin = picture.height * kSubtitleEdgeMargin;
+  final floor =
+      area.height - subtitleFrameHeight(area) * kSubtitleEdgeMargin;
+  final target =
+      picture.bottom - margin - lift.clamp(0.0, 0.5) * picture.height;
+  return math.min(target, floor);
+}
+
 /// The look libVLC's lines take when their place on screen is fixed, not
 /// the picture's: the subtitle stays where the side-car one sits — just
-/// above the bottom controls — whatever the fit or the pinch zoom does to
-/// the picture under it.
+/// above the picture's bottom edge — whatever the fit or the pinch zoom does
+/// to the picture under it.
 ///
 /// libVLC draws an embedded track's lines INTO the picture, at the bottom
 /// of the decoded frame, so a fit that letterboxes the picture or a pinch
@@ -169,15 +190,11 @@ const double kSubtitleEdgeMargin = 0.06;
 /// side-car subtitle does, at the same size it draws.
 ///
 /// [screen] is the player area, [video] the decoded frame, [fit] how the
-/// picture is fitted into it, [pinchScale] the pinch zoom over it (1.0
-/// un-zoomed), and [bottomInset] the height of the bottom controls while
-/// they are up (0 when they are down). The target is the side-car's own
-/// bottom: its edge margin, the viewer's lift, and the controls' height,
-/// whichever is higher. Where the picture's own bottom sits above that
-/// target — pinched out small — no margin can reach it, and the raise
-/// clamps at 0: the lines sit at the picture's bottom, as they must, drawn
-/// inside it. Where either size is unknown, the unanchored look, which is
-/// what a player took before.
+/// picture is fitted into it, and [pinchScale] the pinch zoom over it (1.0
+/// un-zoomed). The target is the picture's bottom edge, a small fixed
+/// margin above it — see [subtitleTargetY] — never the bottom chrome, so
+/// the lines never move when the controls show or hide. Where either size
+/// is unknown, the unanchored look, which is what a player took before.
 VlcSubtitleLook subtitleLookAnchored(
   PlayerSettings settings, {
   required int createdRelativeSize,
@@ -185,7 +202,6 @@ VlcSubtitleLook subtitleLookAnchored(
   required Size video,
   required VlcVideoFit fit,
   double pinchScale = 1.0,
-  double bottomInset = 0,
 }) {
   final base = subtitleLookFrom(
     settings,
@@ -240,13 +256,11 @@ VlcSubtitleLook subtitleLookAnchored(
               (video.height * displayScaleY))
           .round()
           .clamp(10, 500);
-  // The side-car's bottom, in the same numbers: its edge margin, the
-  // viewer's lift, and the controls while they are up, whichever is higher.
-  final frame = subtitleFrameHeight(screen);
-  final edge = frame * kSubtitleEdgeMargin;
-  final rest = edge + settings.subtitleRaise.clamp(0.0, 0.5) * frame;
-  final targetBottom = math.max(rest, bottomInset + edge / 2);
-  final targetY = screen.height - targetBottom;
+  // Where the lines land: just above the picture's bottom edge, not the
+  // screen's — see [subtitleTargetY]. The chrome height is deliberately
+  // not in it: v13 anchored to it and floated the lines a full bar above
+  // the picture even with the controls down.
+  final targetY = subtitleTargetY(screen, displayed, settings.subtitleRaise);
   // How far above the picture's bottom the lines must sit to land there,
   // in the picture's own pixels, as a share of its height.
   final raise = ((displayed.bottom - targetY) / displayScaleY / video.height)
