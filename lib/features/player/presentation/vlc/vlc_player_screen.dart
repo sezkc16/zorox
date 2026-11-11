@@ -144,6 +144,12 @@ const Duration _kArrivalWindow = Duration(seconds: 5);
 /// How soon after a seek a stall must begin to count as that seek's refill.
 const Duration _kAfterSeekSlack = Duration(seconds: 2);
 
+/// How often a stall may ask the provider for fresh links: a link's own
+/// lifetime. HiCine's is ten minutes, so a second ask inside that window
+/// would only mint the same answer again — and a refresh that finds
+/// nothing still ends on the failed screen, so a loop cannot form.
+const Duration _kLinksRefreshCooldown = Duration(minutes: 10);
+
 /// How long after Back has put the bars away a second Back is taken for the
 /// same press. Some televisions deliver one press twice — as a key event and
 /// as a `popRoute` in the same frame — and without this the echo would pop the
@@ -428,6 +434,16 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// set again, held, not told to play (plan note 1). Until the next open.
   bool _parked = false;
 
+  /// Whether a failure may ask the provider for fresh links: a plugin's or
+  /// an add-on's answer, which expires, as opposed to a local file, a
+  /// torrent or a direct link, which has nothing to re-ask for. Set on
+  /// every resolve, so a Retry or an episode advance re-arms it.
+  bool _linksRefreshable = false;
+
+  /// When fresh links were last asked for, so a stall does not ask again
+  /// inside one link lifetime.
+  DateTime? _lastLinksRefreshAt;
+
   /// Lets the display sleep at the end of a long wait; see
   /// [_keepAwakeThroughWait].
   Timer? _waitAwake;
@@ -648,6 +664,17 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// unreadable smear over most of the frame, so the window renders the video
   /// and nothing else.
   bool _inPip = false;
+
+  /// A PiP start held as imminent, without a window yet.
+  ///
+  /// Set on iOS `inactive` (see [didChangeAppLifecycleState]) so the
+  /// background pause holds off until the native side starts the window
+  /// from `didEnterBackground` — or the app comes back. Cleared when the
+  /// window opens or fails ([_onPictureInPicture]), when the button
+  /// takes over ([_enterPip]), and on `resumed` when no window opened
+  /// (Control Center). Without it a transient foreground interruption
+  /// that never backgrounds the app would hold the pause off forever.
+  bool _pipImminent = false;
 
   /// The PiP attempt's watchdog: how long the window has to open.
   ///
@@ -1008,6 +1035,17 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// The look last handed to the controller - see [_restyleSubtitles].
   VlcSubtitleLook? _sentLook;
 
+  /// The video size the anchored subtitle look was last computed from, so
+  /// a new size — a new media, a rotation-aware size landing — re-anchors
+  /// it without resending the same look on every tick.
+  Size? _anchoredVideoSize;
+
+  /// The pinch zoom's re-anchor, held back while the gesture runs: the
+  /// scale reports at 60 fps, and a look per frame would cross the channel
+  /// sixty times a second for a subtitle that only settles when the
+  /// fingers lift.
+  Timer? _subtitleReanchorTimer;
+
   ProviderContainer? _container;
 
   @override
@@ -1017,6 +1055,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Told again whenever the route comes back on top: a quiet end waits for
     // it (see [_leaveWhenOnTop]).
     if (_leaveOnTop) _leaveWhenOnTop();
+    // A rotation reaches here through the media query, and it moves the
+    // picture libVLC's subtitle lines are drawn into.
+    _reanchorSubtitles();
   }
 
   /// Set once the Play ended quietly with a screen over the player: an
@@ -1210,6 +1251,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _chrome = ChromeVisibilityController(
       isPlaying: () => _controller.value.isPlaying,
     );
+    // The embedded subtitle's anchor follows the picture: a pinch, the
+    // chrome coming up, or a rotation moves the picture it is drawn into,
+    // so the look is recomputed with it — see [_reanchorSubtitles].
+    _videoScale.addListener(_onVideoScaleChanged);
+    _chrome.addListener(_reanchorSubtitles);
     _watchdog = Timer.periodic(_kWatchdogTick, (_) {
       _checkFirstFrame();
       _checkStall();
@@ -1255,14 +1301,66 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// look it was created with, and nothing about that is worth a word to the
   /// viewer; the controller keeps the look for a player created later.
   void _restyleSubtitles(PlayerSettings settings) {
-    final look = subtitleLookFrom(
-      settings,
-      createdRelativeSize: _createdRelativeSize,
-    );
+    final look = _anchoredSubtitleLook(settings);
     if (look == _sentLook) return;
     _sentLook = look;
     unawaited(
       _controller.setSubtitleLook(look).catchError((Object _) => false),
+    );
+  }
+
+  /// Re-anchors libVLC's subtitle lines to the screen after the picture
+  /// moved under them: a fit change, a pinch, the chrome coming up, a
+  /// rotation, a new video size. Nothing is sent when the look has not
+  /// changed.
+  void _reanchorSubtitles() {
+    if (_disposed) return;
+    _restyleSubtitles(_playerSettings.value);
+  }
+
+  /// A pinch reports at 60 fps while the fingers are down; the look is
+  /// recomputed once they have held still, when the picture settles.
+  void _onVideoScaleChanged() {
+    _subtitleReanchorTimer?.cancel();
+    _subtitleReanchorTimer = Timer(
+      const Duration(milliseconds: 150),
+      _reanchorSubtitles,
+    );
+  }
+
+  /// The look [settings] give libVLC's lines, anchored to the screen rather
+  /// than the picture: see [subtitleLookAnchored]. The geometry is only
+  /// known once a picture is up — before that, and wherever it cannot be
+  /// measured, the unanchored look, which is what a player took before.
+  VlcSubtitleLook _anchoredSubtitleLook(PlayerSettings settings) {
+    final plain = subtitleLookFrom(
+      settings,
+      createdRelativeSize: _createdRelativeSize,
+    );
+    if (_stage != _Stage.playing) return plain;
+    final videoSize =
+        _controller.value.displayVideoSize ?? _controller.value.videoSize;
+    if (videoSize == null || videoSize.isEmpty) return plain;
+    Size screen;
+    try {
+      screen = MediaQuery.sizeOf(context);
+    } on Object {
+      return plain;
+    }
+    if (screen.isEmpty) return plain;
+    final chromeUp = _chrome.value && !_inPip && _pictureUp && _ended == null;
+    return subtitleLookAnchored(
+      settings,
+      createdRelativeSize: _createdRelativeSize,
+      screen: screen,
+      video: videoSize,
+      fit: _fit,
+      pinchScale: _videoScale.value,
+      bottomInset: chromeUp
+          ? HotstarPlayerStyle.bottomChromeHeightFor(
+              isTv: _form == PlayerFormFactor.tv,
+            )
+          : 0,
     );
   }
 
@@ -1414,6 +1512,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       );
       if (_disposed) return;
       _resolved = resolved;
+      // Whether a later failure may ask for fresh links: a plugin's or an
+      // add-on's answer expires — HiCine's in ten minutes — while a local
+      // file, a torrent or a direct link has nothing to re-ask for. A
+      // resolve here is fresh already, so the cooldown restarts with it.
+      _linksRefreshable =
+          pluginFor(_read, widget.item, _videoUrl) != null ||
+          widget.item.source == kAddonItemSource;
+      _lastLinksRefreshAt = null;
       // A new resolve: recovery learns the candidates, and what the race
       // found about them.
       _checkGeneration += 1;
@@ -2724,6 +2830,22 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           positionMs: _reopenTarget().inMilliseconds,
         );
       case GiveUp(:final cause, :final detail):
+        // The ladder has burned through every link the last resolve gave
+        // it. A plugin's links expire — HiCine's in ten minutes, and its
+        // own answer is 403 "expired" — so a stall long into a film is not
+        // a dead server, and reopening the same addresses could never heal
+        // it. Ask the provider again, once a link lifetime, and open the
+        // fresh answer where playback stopped. A refresh that finds nothing
+        // still ends on the failed screen, as below.
+        if (_linksRefreshable &&
+            (_lastLinksRefreshAt == null ||
+                clock.now().difference(_lastLinksRefreshAt!) >=
+                    _kLinksRefreshCooldown)) {
+          _lastLinksRefreshAt = clock.now();
+          _setStatus(_l10n?.playerReconnecting ?? 'Reconnecting…');
+          unawaited(_refreshLinksAndReopen(detail));
+          break;
+        }
         _qoe
           ..waitEnd()
           ..gaveUp(cause: cause.name);
@@ -2759,6 +2881,60 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       ms: result.elapsed.inMilliseconds,
     );
     _run(_policy.checked(source, result));
+  }
+
+  /// Asks the provider for fresh links and opens the best one where
+  /// playback stopped, after the ladder has burned through the last
+  /// resolve's. The resolve is the open's own, minus the resume lookup:
+  /// where playback stopped is already known, and the recorder and the
+  /// tracker stay the same episode's. On any failure — the provider
+  /// answers nothing, or its answer is as dead as the last — the failed
+  /// screen, where Retry asks again by hand.
+  Future<void> _refreshLinksAndReopen(String detail) async {
+    if (_disposed) return;
+    final generation = ++_resolveGeneration;
+    _forgetSources();
+    _publishPanelData();
+    ResolvedPlayback resolved;
+    try {
+      resolved = await resolvePlayback(
+        read: _read,
+        item: widget.item,
+        videoUrl: _videoUrl,
+        preloadedStreams: null,
+        isCancelled: () => _disposed,
+        onCandidates: (streams) => _onCandidates(generation, streams),
+        onProbe: (index, outcome) => _onProbe(generation, index, outcome),
+      );
+    } on Object {
+      if (_disposed) return;
+      return _giveUp(detail);
+    }
+    if (_disposed) return;
+    _resolved = resolved;
+    _checkGeneration += 1;
+    _policy.candidatesChanged([
+      for (final stream in resolved.streams)
+        RecoveryCandidate(
+          authority: Uri.tryParse(stream.url)?.authority ?? '',
+          checkable: !isUncheckableSource(stream),
+        ),
+    ]);
+    for (final entry in _probes.entries) {
+      if (entry.value != ProbeOutcome.trying) {
+        _policy.probed(entry.key, entry.value);
+      }
+    }
+    _publishPanelData();
+    await _openAttempt(
+      resolved.index,
+      startAt: _reopenTarget(),
+      reason: 'refresh',
+      keepPicture: true,
+      // A viewer who paused while it recovered finds it paused.
+      autoPlay: _controller.pauseRequests == _pauseRequestsAtFailure,
+      status: _l10n?.playerReconnecting ?? '',
+    );
   }
 
   /// Moves to another source: the start-up view names it (spec 2: "The
@@ -3843,6 +4019,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     final sourceRect = _pipSourceRect();
     _pipAttemptFromButton = fromButton;
     _pipWindowOpened = false;
+    // A button tap supersedes any start held as imminent (see
+    // [didChangeAppLifecycleState]): the request below sets the hold
+    // itself, so the flag must not stay up past it.
+    _pipImminent = false;
     if (kDebugMode) {
       debugPrint(
         'VlcPlayerScreen: PiP requested (fromButton: $fromButton, sourceRect: $sourceRect)',
@@ -3958,9 +4138,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// has no chip in it, so the lock clears on the way in.
   void _onPictureInPicture() {
     final inPip = _controller.isPictureInPicture.value;
-    // The attempt's answer, whatever it is: the watchdog stands down.
+    // The attempt's answer, whatever it is: the watchdog stands down,
+    // and a start held as imminent (see [didChangeAppLifecycleState]) is
+    // resolved too — the hold is now the open window's own, or the
+    // attempt is over.
     _pipWatchdog?.cancel();
     _pipWatchdog = null;
+    _pipImminent = false;
     if (!mounted || _disposed || inPip == _inPip) return;
     if (inPip) {
       _pipWindowOpened = true;
@@ -4541,6 +4725,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   void _onPlaybackValue() {
     if (_disposed) return;
     final value = _controller.value;
+    // A new video size moves the picture libVLC draws its lines into — a
+    // new media, a rotation-aware size landing — so the subtitle anchor
+    // follows it.
+    final videoSize = value.displayVideoSize ?? value.videoSize;
+    if (videoSize != _anchoredVideoSize) {
+      _anchoredVideoSize = videoSize;
+      _reanchorSubtitles();
+    }
     _syncPlayingState(value);
     _syncOrientation(value);
     _qoeObserve(value);
@@ -5098,19 +5290,51 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       if (_inPip) {
         unawaited(_controller.stopPictureInPicture());
         setState(() => _inPip = false);
+      } else if (_pipImminent) {
+        // A start was held as imminent (see the `inactive` branch) but no
+        // window opened — a transient foreground interruption (Control
+        // Center, Notification Center, a call) that never left the app.
+        // Release the hold so the background pause is not held off
+        // forever, and cancel the native attempt if one is still pending.
+        // The native stop is a no-op when nothing is open or pending.
+        _pipImminent = false;
+        unawaited(_controller.stopPictureInPicture());
       }
     }
     if (state == AppLifecycleState.inactive) {
-      // The viewer left the app mid-film - Home, the app switcher, the
-      // lock - so float the video instead of leaving it behind. Only while
-      // it is actually playing, and only where PiP exists: a paused film
-      // stays paused. A transient inactive (Control Center, a call) is
-      // taken back by the resumed branch above, which closes a window that
-      // never should have opened. The controller holds the background
-      // pause off while the attempt is in flight (see
-      // `VlcPlayerController.startPictureInPicture`), so the film does not
-      // stop underneath the window that is about to open.
-      if (!_inPip && _pipAvailable && _controller.value.isPlaying) {
+      // iOS: do NOT start PiP here. `inactive` fires for a transient
+      // overlay too — Control Center, Notification Center, a call — and
+      // starting PiP for one of those re-frames the video (the PiP host
+      // view comes to the front at the picture's rect, so the picture
+      // pulls in) and clears the lock, both for a window that never
+      // opens. Leaving the app for real (Home, the app switcher) is
+      // handled natively instead: the eager controller's
+      // `canStartPictureInPictureAutomaticallyFromInline` opens the
+      // window when the app backgrounds, and the plugin starts it from
+      // `didEnterBackground` as a backstop (see
+      // VlcPictureInPicture.swift). A transient inactive never
+      // backgrounds the app, so neither fires for Control Center and
+      // the video and the lock are left alone.
+      // What `inactive` does do on iOS is mark a start as imminent, so
+      // the background pause (which fires when the app actually goes
+      // away) holds off and the film keeps playing under the window
+      // that is about to open. Only while it is actually playing, and
+      // only where PiP exists; a paused film stays paused. The hold is
+      // released on `resumed` above when no window opened (Control
+      // Center), and by the `pictureInPicture` event when one did.
+      // Android keeps its own path: there `inactive` IS the moment to
+      // enter PiP (MainActivity.enterPictureInPictureMode is a
+      // synchronous Activity call, not a slow gate), and the watchdog
+      // test holds it shut.
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        if (!_inPip &&
+            !_pipImminent &&
+            _pipAvailable &&
+            _controller.value.isPlaying) {
+          _pipImminent = true;
+          _controller.notePictureInPictureImminent();
+        }
+      } else if (!_inPip && _pipAvailable && _controller.value.isPlaying) {
         unawaited(_enterPip());
       }
     }
@@ -5648,10 +5872,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _lockEscape?.cancel();
     _watchdog?.cancel();
     _recoveryTimer?.cancel();
+    _subtitleReanchorTimer?.cancel();
     unawaited(_checkChanges?.cancel());
     _checkTick?.cancel();
     // After the controls, which unmount first and stop listening; its hide
     // clock is still armed and nothing else would stop it.
+    _chrome.removeListener(_reanchorSubtitles);
     _chrome.dispose();
     // Same order and the same reason: the controls listen to it through a
     // ValueListenableBuilder and have already gone by here.
@@ -5667,6 +5893,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // layer, and the Transform reads it through a ValueListenableBuilder.
     // Disposed after the controls are gone, like the other notifiers they
     // listen to.
+    _videoScale.removeListener(_onVideoScaleChanged);
     _videoScale.dispose();
     // The closed-captions flag: the controls read it through a
     // ValueListenableBuilder and have already gone by here.
@@ -5901,7 +6128,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
                   // Transform over the video reads it.
                   videoScale: _videoScale,
                   onFitChanged: (fit) {
-                    if (mounted) setState(() => _fit = fit);
+                    if (!mounted) return;
+                    setState(() => _fit = fit);
+                    // The picture's place on screen changed with it, and
+                    // libVLC's lines are drawn into the picture.
+                    _reanchorSubtitles();
                   },
                   // Only where the OS turns the device when asked: a phone, or
                   // a tablet that has not stopped listening (see

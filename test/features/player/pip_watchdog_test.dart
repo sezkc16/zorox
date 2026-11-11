@@ -2,10 +2,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:skystream/core/domain/entity/multimedia_item.dart';
 import 'package:skystream/features/player/presentation/vlc/vlc_player_controls.dart';
-import 'package:skystream/features/player/presentation/vlc/vlc_player_screen.dart';
+import 'package:skystream/features/player/presentation/widgets/player_control_components.dart'
+    show PlayerActionButton;
 
+import 'fake_vlc_engine.dart';
 import 'vlc_screen_harness.dart';
 
 /// A PiP start the system never answers must not freeze the player, and
@@ -171,6 +172,76 @@ void main() {
       );
       await tester.pump();
       expect(find.byType(VlcPlayerControls), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'on iOS, a transient inactive (Control Center) starts no PiP and keeps the lock',
+    variant: texturePlatform,
+    (tester) async {
+      // iOS before pumping: the screen reads the platform in initState
+      // and build (the PiP gate and the texture renderer), so the
+      // override has to be in place before the screen is stood up.
+      // Android keeps the `inactive` -> enterPip path (the test above);
+      // iOS must not start PiP for a transient overlay, which re-frames
+      // the video and clears the lock for a window that never opens.
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      final engine = FakeVlcEngine();
+      installEngineMocks(engine: engine);
+      await pumpPlayer(tester, isTv: false);
+      await sendFirstFrame(tester);
+      expect(find.byType(VlcPlayerControls), findsOneWidget);
+
+      // The PiP button is only there where the platform can do PiP; the
+      // Rotate tap re-runs build, which is when it appears (see
+      // pumpPhonePlaying above).
+      await tester.tap(find.byTooltip('Rotate'));
+      await tester.pump();
+      expect(find.byTooltip('PiP'), findsOneWidget);
+
+      // Lock the player: the padlock, then the unlock chip in place of
+      // the chrome.
+      await tester.tap(find.byTooltip('Lock'));
+      await tester.pump();
+      expect(
+        find.widgetWithText(PlayerActionButton, 'Unlock'),
+        findsOneWidget,
+        reason: 'the padlock did not lock the player',
+      );
+
+      // Control Center: a transient inactive. No PiP request goes out,
+      // the lock stays engaged, and the chrome is not unmounted (the
+      // video is not re-framed).
+      engine.calls.clear();
+      tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.inactive,
+      );
+      await tester.pump();
+      expect(
+        engine.callsTo('startPictureInPicture'),
+        isEmpty,
+        reason: 'Control Center asked for PiP',
+      );
+      expect(find.byType(VlcPlayerControls), findsOneWidget);
+      expect(
+        find.widgetWithText(PlayerActionButton, 'Unlock'),
+        findsOneWidget,
+        reason: 'Control Center cleared the lock',
+      );
+
+      // Closing Control Center: still locked, and still no PiP request.
+      tester.binding.handleAppLifecycleStateChanged(
+        AppLifecycleState.resumed,
+      );
+      await tester.pump();
+      expect(
+        find.widgetWithText(PlayerActionButton, 'Unlock'),
+        findsOneWidget,
+        reason: 'returning from Control Center cleared the lock',
+      );
+      expect(engine.callsTo('startPictureInPicture'), isEmpty);
 
       await tester.pumpWidget(const SizedBox());
     },

@@ -55,6 +55,10 @@ final class VlcPictureInPictureController: NSObject {
   private var frameIndex = 0
   /// Whether a start is still waiting on `isPictureInPicturePossible`.
   private var wantsStart = false
+  /// The app actually leaving (Home, the app switcher, the lock) — Control
+  /// Center never backgrounds the app, so this never fires for it.
+  /// Registered in `init`, removed in `deinit`.
+  private var backgroundObserver: NSObjectProtocol?
   /// The wait for `isPictureInPicturePossible`, one-shot: it fires when the
   /// layer has presented content, which is when the system will accept a
   /// start. A start issued before that is silently dropped — no window, no
@@ -86,9 +90,28 @@ final class VlcPictureInPictureController: NSObject {
     self.player = player
     self.onStateChanged = onStateChanged
     super.init()
+    // The Home swipe, natively: when the app actually backgrounds, open
+    // the window. Control Center, Notification Center and a call never
+    // background the app, so this never fires for them — which is the
+    // whole point, because the Dart `inactive` handler cannot tell a
+    // transient overlay from leaving, and starting PiP for one re-frames
+    // the video and clears the lock for a window that never opens. The
+    // Dart side only marks a start as imminent on `inactive` (so the
+    // background pause holds off); the window itself is opened here, or
+    // by the system's own auto-start, never by the Dart callback.
+    backgroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didEnterBackgroundNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.onDidEnterBackground()
+    }
   }
 
   deinit {
+    if let backgroundObserver {
+      NotificationCenter.default.removeObserver(backgroundObserver)
+    }
     dispose()
   }
 
@@ -214,6 +237,33 @@ final class VlcPictureInPictureController: NSObject {
       "PiP starting (frames enqueued: %{public}d)",
       log: Self.pipLog, type: .debug, framesEnqueued)
     pipController.startPictureInPicture()
+  }
+
+  /// The app actually went away (Home, the app switcher, the lock), so
+  /// open the window — like YouTube. Control Center never backgrounds
+  /// the app, so this never fires for it, and a transient overlay
+  /// neither re-frames the video nor clears the lock.
+  ///
+  /// The Dart `inactive` handler used to start PiP for every `inactive`,
+  /// including Control Center, and it is too late for a Home swipe
+  /// anyway: by the time the Dart callback runs, the app is already
+  /// backgrounding and the gated start cannot complete. The system's
+  /// own auto-start (`canStartPictureInPictureAutomaticallyFromInline`)
+  /// is the primary mechanism; this is the backstop that starts
+  /// explicitly when it does not fire, with the same KVO gate and
+  /// three-second timeout as the button, so a start that cannot
+  /// complete reports instead of hanging. A paused film stays paused:
+  /// only a playing film floats. The Dart side holds the background
+  /// pause off from `inactive` (see `notePictureInPictureImminent`),
+  /// so the film keeps playing under the window that is about to open.
+  private func onDidEnterBackground() {
+    guard !isActive, !wantsStart else { return }
+    guard let player, player.textureRenderer != nil else { return }
+    guard player.pipIsPlaying else { return }
+    // No source rect: the window opens from the window's bounds, which
+    // is where the request falls back anyway, and the app is going away
+    // so the open animation's frame is the whole screen.
+    _ = start()
   }
 
   /// Re-frames the host view (and its layer) to the video picture's current

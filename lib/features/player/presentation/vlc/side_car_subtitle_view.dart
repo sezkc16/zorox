@@ -30,10 +30,6 @@ import '../../domain/side_car_subtitles.dart';
 import '../../domain/subtitle_cues.dart';
 import '../../domain/subtitle_style.dart';
 
-/// Space between the lines and the edge of the player area, as a share of the
-/// frame height.
-const double _kEdgeMargin = 0.06;
-
 /// Space the text keeps from each side, as a share of the width.
 const double _kSideMargin = 0.05;
 
@@ -148,7 +144,7 @@ class _SideCarSubtitleViewState extends State<SideCarSubtitleView> {
     final style = subtitleStyleFrom(widget.settings);
     final fontSize = subtitleFontSize(widget.settings, area);
     final frame = subtitleFrameHeight(area);
-    final margin = frame * _kEdgeMargin;
+    final margin = frame * kSubtitleEdgeMargin;
     final side = area.width * _kSideMargin;
     // The viewer's lift, a share of the frame as libVLC's is of the picture.
     // Bottom lines only: a line placed at the top or the middle stays there.

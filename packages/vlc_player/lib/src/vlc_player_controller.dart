@@ -239,6 +239,18 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   /// window's bounds.
   Future<bool> startPictureInPicture({Rect? sourceRect});
 
+  /// Marks a picture-in-picture start as imminent, holding off the
+  /// background pause, without asking the native side to start yet.
+  ///
+  /// The native side starts the window when the app actually backgrounds
+  /// (the `didEnterBackground` observer); this only keeps the film
+  /// playing until then. Cleared when the window opens or fails (the
+  /// `pictureInPicture` event), or by [stopPictureInPicture]. A transient
+  /// foreground interruption (Control Center) that never backgrounds the
+  /// app never pauses the film, so the hold is released by the caller's
+  /// `resumed` handler instead.
+  void notePictureInPictureImminent();
+
   /// Stops iOS picture-in-picture, if one is running. The window closing is
   /// reported through [isPictureInPicture].
   Future<void> stopPictureInPicture();
@@ -1506,6 +1518,17 @@ class _VlcPlayerController extends VlcPlayerController
       return Future<void>.value();
     }
     return _invoke('stop');
+  }
+
+  @override
+  void notePictureInPictureImminent() {
+    if (_isDisposed) return;
+    // The same flag [startPictureInPicture] sets, so the background pause
+    // (which can fire while the native start is still waiting on
+    // `isPictureInPicturePossible`) sees the attempt and holds off. The
+    // native side starts the window from `didEnterBackground`; the film
+    // must not stop underneath it.
+    _pictureInPicturePending = true;
   }
 
   @override
