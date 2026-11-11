@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart' show AppLifecycleState;
+import 'package:flutter/widgets.dart' show AppLifecycleState, Rect;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vlc_player/vlc_player.dart';
 
@@ -128,6 +128,38 @@ void main() {
       // The window closed while the app was away: pause.
       await harness.sendEvent(1, {'pictureInPicture': false});
       expect(methodsOn(harness), <String>['pause']);
+    });
+  });
+
+  group('startPictureInPicture source rect', () {
+    test('sends the video picture rect to native', () async {
+      final controller = await playing();
+      addTearDown(controller.dispose);
+      // A 16:9 picture letterboxed in a portrait phone: the band the
+      // viewer actually sees, which the window opens from.
+      const rect = Rect.fromLTWH(0, 312, 390, 219);
+      expect(await controller.startPictureInPicture(sourceRect: rect), isTrue);
+      final call = harness.calls.singleWhere(
+        (call) => call.method == 'startPictureInPicture',
+      );
+      // viewId rides along on every native call; the rect is the new part.
+      expect(call.arguments, <String, Object?>{
+        'viewId': 1,
+        'x': 0.0,
+        'y': 312.0,
+        'width': 390.0,
+        'height': 219.0,
+      });
+    });
+
+    test('sends no rect when none is given', () async {
+      final controller = await playing();
+      addTearDown(controller.dispose);
+      expect(await controller.startPictureInPicture(), isTrue);
+      final call = harness.calls.singleWhere(
+        (call) => call.method == 'startPictureInPicture',
+      );
+      expect(call.arguments, <String, Object?>{'viewId': 1});
     });
   });
 

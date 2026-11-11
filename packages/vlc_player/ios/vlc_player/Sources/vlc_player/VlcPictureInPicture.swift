@@ -25,7 +25,9 @@ final class VlcPictureInPictureController: NSObject {
 
   private var displayLayer: AVSampleBufferDisplayLayer?
   /// The layer has to live in a window for the PiP controller to take it.
-  /// One point square at the origin: present, but nothing to look at.
+  /// Sized to the video picture's on-screen rect, so the system has a real
+  /// source frame to open from; it takes no touches, so it never sits on
+  /// top of a button.
   private var hostView: UIView?
   private var pipController: AVPictureInPictureController?
   private var feedTimer: Timer?
@@ -57,7 +59,12 @@ final class VlcPictureInPictureController: NSObject {
   ///
   /// False when the device cannot do PiP, when the player is view-backed and
   /// has no texture to feed from, or when there is no picture yet to show.
-  func start() -> Bool {
+  ///
+  /// [sourceRect] is the video picture's on-screen frame, which the window
+  /// opens from. Nil falls back to the key window's bounds — always a real
+  /// frame, never the 1x1 host that the system treated as not-displaying
+  /// and silently refused to open from (no window, no failure callback).
+  func start(sourceRect: CGRect? = nil) -> Bool {
     guard !isActive else {
       return true
     }
@@ -68,7 +75,7 @@ final class VlcPictureInPictureController: NSObject {
       return false
     }
     if #available(iOS 15.0, *) {
-      return startSampleBufferPiP()
+      return startSampleBufferPiP(sourceRect: sourceRect)
     } else {
       return false
     }
@@ -101,7 +108,7 @@ final class VlcPictureInPictureController: NSObject {
   }
 
   @available(iOS 15.0, *)
-  private func startSampleBufferPiP() -> Bool {
+  private func startSampleBufferPiP(sourceRect: CGRect?) -> Bool {
     let layer = AVSampleBufferDisplayLayer()
     layer.videoGravity = .resizeAspect
     // The layer's own clock, running at host time, so the presentation times
@@ -116,12 +123,30 @@ final class VlcPictureInPictureController: NSObject {
       CMTimebaseSetRate(timebase, rate: 1.0)
     }
 
-    let view = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
-    layer.frame = view.bounds
-    view.layer.addSublayer(layer)
+    // The source frame: the video picture's real on-screen rect, so the
+    // system has something to animate from and treats the content as
+    // displaying. A 1x1 host was treated as not-displaying and
+    // startPictureInPicture silently did nothing — no window, and no failure
+    // callback either, which is why the button froze the screen instead of
+    // failing cleanly. The rect is the picture's, not the whole screen, so
+    // the layer never draws over the app UI above or below the picture.
+    // A missing or degenerate rect falls back to the window's bounds, so a
+    // bad measurement degrades to a full-screen source rather than
+    // stranding the window again. The host takes no touches, so it can
+    // never sit on top of a button.
     guard let window = Self.keyWindow else {
       return false
     }
+    let bounds = window.bounds
+    var frame = sourceRect ?? bounds
+    frame = frame.intersection(bounds)
+    if frame.isEmpty || frame.width < 2 || frame.height < 2 {
+      frame = bounds
+    }
+    let view = UIView(frame: frame)
+    view.isUserInteractionEnabled = false
+    layer.frame = view.bounds
+    view.layer.addSublayer(layer)
     window.addSubview(view)
 
     let contentSource = AVPictureInPictureController.ContentSource(
@@ -133,12 +158,16 @@ final class VlcPictureInPictureController: NSObject {
     // a film is playing: that is the Home-swipe path, and it needs a
     // controller to already exist - which is also why the screen starts PiP
     // explicitly when the app resigns active (see `VlcPlayerScreen`), rather
-    // than relying on this alone. Apple's rule for the automatic start is
-    // "a full-screen source view, or this flag": the source view here is a
-    // one-point host the viewer must never see, so the flag is what carries
-    // it. (It was `false`, with a comment that only the button opens the
+    // than relying on this alone. The flag is the system's own auto-start
+    // backstop; the Dart-side start on `inactive` is the primary mechanism.
+    // (The flag was `false`, with a comment that only the button opens the
     // window - which is also why swiping home did nothing at all.)
     pipController.canStartPictureInPictureAutomaticallyFromInline = true
+    // The source frame, spelled out: where the window animates from, and
+    // where it restores to. The same view and bounds as the layer, so it
+    // cannot disagree with the content.
+    pipController.sourceView = view
+    pipController.sourceRect = view.bounds
     displayLayer = layer
     hostView = view
     self.pipController = pipController

@@ -720,12 +720,17 @@ void main() {
       final service = PlayerPlatformService();
 
       // Nothing settled first: the press is the session's first turn.
+      // The press pins landscape and turns the device to it now
+      // (requestOrientation), then the way out follows the device back.
       service.flipOrientation(PlayerFormFactor.phone);
       turned(tester, landscape);
       service.restoreOrientation();
       await tester.pump();
 
-      expect(calls, ['followDevice {fallback: portrait}']);
+      expect(calls, [
+        'requestOrientation {orientation: landscape}',
+        'followDevice {fallback: portrait}',
+      ]);
     }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
   });
 
@@ -943,6 +948,8 @@ void main() {
       await tester.pump();
       expect(calls, [
         'preferred [DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]',
+        // The pin turns the device to landscape now, not just allows it.
+        'requestOrientation {orientation: landscape}',
         'preferred []',
         'followDevice {fallback: portrait}',
       ]);

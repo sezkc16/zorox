@@ -232,7 +232,12 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   /// native player is attached. Android has no equivalent here: its PiP is
   /// an activity mode the host screen enters itself, so this stays false
   /// there.
-  Future<bool> startPictureInPicture();
+  ///
+  /// [sourceRect] is the video picture's on-screen rect, which the native
+  /// window opens from: a real frame, not a 1x1 host the system treats as
+  /// not-displaying. Null sends no rect and native falls back to the
+  /// window's bounds.
+  Future<bool> startPictureInPicture({Rect? sourceRect});
 
   /// Stops iOS picture-in-picture, if one is running. The window closing is
   /// reported through [isPictureInPicture].
@@ -1481,13 +1486,23 @@ class _VlcPlayerController extends VlcPlayerController
   }
 
   @override
-  Future<bool> startPictureInPicture() async {
+  Future<bool> startPictureInPicture({Rect? sourceRect}) async {
     // Set before the invoke, so the background pause (which can fire on the
     // lifecycle listener while this round trip is in flight) sees the
     // attempt and holds off: pausing now would stop the very playback the
     // PiP window is about to show.
     _pictureInPicturePending = true;
-    final started = await _invokeFor<bool>('startPictureInPicture');
+    final started = await _invokeFor<bool>(
+      'startPictureInPicture',
+      sourceRect == null
+          ? null
+          : <String, Object?>{
+              'x': sourceRect.left,
+              'y': sourceRect.top,
+              'width': sourceRect.width,
+              'height': sourceRect.height,
+            },
+    );
     if (started != true) {
       // The native side refused outright, so there is no event coming to
       // clear the flag - clear it here, and let the background policy have

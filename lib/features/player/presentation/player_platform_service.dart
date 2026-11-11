@@ -304,6 +304,39 @@ class PlayerPlatformService {
 
   void detachPipListener() => _pipChannel.setMethodCallHandler(null);
 
+  /// Pins [orientations] and, on iOS, turns the interface to them now.
+  ///
+  /// `setPreferredOrientations` only changes what is allowed; on iOS it
+  /// does not turn an interface that is already up, so a film never
+  /// actually rotated to landscape on play. The native request is the turn
+  /// itself, and it waits for the pin, because iOS refuses an orientation
+  /// the pin still excludes. Every pin in this file goes through here, so
+  /// the rotate button and the extension window turn too.
+  Future<void> _pinAndTurn(
+    List<DeviceOrientation> orientations,
+    Orientation orientation,
+  ) async {
+    await SystemChrome.setPreferredOrientations(orientations);
+    await _forceRotation(orientation);
+  }
+
+  /// Asks iOS to turn to [orientation] now, rather than waiting for the
+  /// device to move. A no-op off iOS. The catch is load-bearing: a missing
+  /// native handler (an old build, or a test with no mock) must not surface
+  /// as an error far from the call site.
+  Future<void> _forceRotation(Orientation orientation) async {
+    if (defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      await _orientationChannel.invokeMethod<void>('requestOrientation', {
+        'orientation': orientation.name,
+      });
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('PlayerPlatformService.requestOrientation: $e');
+      }
+    }
+  }
+
   /// Points the device the way the video is shaped, once the video's shape has
   /// stopped changing.
   ///
@@ -365,8 +398,9 @@ class PlayerPlatformService {
       _orientationBeforePin ??= _viewOrientation();
       _pinnedOrientation = wanted;
       unawaited(
-        SystemChrome.setPreferredOrientations(
+        _pinAndTurn(
           wanted == Orientation.landscape ? _landscape : _portrait,
+          wanted,
         ),
       );
     });
@@ -398,8 +432,9 @@ class PlayerPlatformService {
     _chosenByViewer = wanted;
     _pinnedOrientation = wanted;
     unawaited(
-      SystemChrome.setPreferredOrientations(
+      _pinAndTurn(
         wanted == Orientation.landscape ? _landscape : _portrait,
+        wanted,
       ),
     );
   }
@@ -452,10 +487,11 @@ class PlayerPlatformService {
   void pinOrientation(List<DeviceOrientation> orientations) {
     _dropShapeCandidate();
     _orientationBeforePin ??= _viewOrientation();
-    _pinnedOrientation = orientations.contains(DeviceOrientation.portraitUp)
+    final wanted = orientations.contains(DeviceOrientation.portraitUp)
         ? Orientation.portrait
         : Orientation.landscape;
-    unawaited(SystemChrome.setPreferredOrientations(orientations));
+    _pinnedOrientation = wanted;
+    unawaited(_pinAndTurn(orientations, wanted));
   }
 
   /// The release, then on iOS a request to follow the device.

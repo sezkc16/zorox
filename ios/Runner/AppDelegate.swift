@@ -158,22 +158,35 @@ import UserNotifications
     // but iOS keeps a turned interface for as long as it is still allowed: the
     // app stayed sideways in an upright hand, and for good under the rotation
     // lock. The player asks here for the device's own orientation, which UIKit
-    // reports with the lock applied.
+    // reports with the lock applied - and for a turn to a named orientation,
+    // because `setPreferredOrientations` on its own only changes what is
+    // allowed and does not turn an interface that is already up, so a film
+    // never actually rotated to landscape on play.
     let orientationChannel = FlutterMethodChannel(
       name: "dev.akash.skystream/orientation",
       binaryMessenger: engineBridge.applicationRegistrar.messenger()
     )
     orientationChannel.setMethodCallHandler { call, result in
-      guard call.method == "followDevice" else {
+      switch call.method {
+      case "followDevice":
+        let fallback = (call.arguments as? [String: Any])?["fallback"] as? String
+        // A turn of the main queue later, after the engine has applied the
+        // release the player sent first.
+        DispatchQueue.main.async {
+          AppDelegate.followDeviceOrientation(fallback: fallback)
+          result(nil)
+        }
+      case "requestOrientation":
+        let orientation = (call.arguments as? [String: Any])?["orientation"] as? String
+        // A turn of the main queue later, after the engine has applied the
+        // pin the player sent first: iOS refuses an orientation the pin
+        // still excludes.
+        DispatchQueue.main.async {
+          AppDelegate.requestOrientation(orientation)
+          result(nil)
+        }
+      default:
         result(FlutterMethodNotImplemented)
-        return
-      }
-      let fallback = (call.arguments as? [String: Any])?["fallback"] as? String
-      // A turn of the main queue later, after the engine has applied the
-      // release the player sent first.
-      DispatchQueue.main.async {
-        AppDelegate.followDeviceOrientation(fallback: fallback)
-        result(nil)
       }
     }
 
@@ -198,6 +211,30 @@ import UserNotifications
         reading["freeMb"] = Int(available / 1_048_576)
       }
       result(reading)
+    }
+  }
+
+  /// Turns the app to the requested orientation: the pin's other half.
+  ///
+  /// `setPreferredOrientations` only changes what is allowed; on iOS it
+  /// does not turn an interface that is already up, so a film never
+  /// actually rotated to landscape on play. This asks the scene for the
+  /// geometry, which is the turn itself. iOS 16 and later; older iOS
+  /// re-reads the device's orientation, which only turns the app if the
+  /// device is already that way up.
+  private static func requestOrientation(_ orientation: String?) {
+    guard #available(iOS 16.0, *) else {
+      UIViewController.attemptRotationToDeviceOrientation()
+      return
+    }
+    let mask: UIInterfaceOrientationMask
+    switch orientation {
+    case "landscape": mask = .landscape
+    case "portrait": mask = .portrait
+    default: return
+    }
+    for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+      scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask))
     }
   }
 

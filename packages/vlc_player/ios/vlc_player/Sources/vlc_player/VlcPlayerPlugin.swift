@@ -274,7 +274,7 @@ public class VlcPlayerPlugin: NSObject, FlutterPlugin {
     case "getMediaStats":
       result(player.getMediaStats())
     case "startPictureInPicture":
-      result(player.startPictureInPicture())
+      result(player.startPictureInPicture(sourceRect: Self.pictureInPictureSourceRect(arguments)))
     case "stopPictureInPicture":
       player.stopPictureInPicture()
       result(nil)
@@ -362,6 +362,24 @@ public class VlcPlayerPlugin: NSObject, FlutterPlugin {
       return number.doubleValue
     }
     return value as? Double
+  }
+
+  /// The PiP source rect Dart sends (the video picture's on-screen frame),
+  /// or nil when it sends none or a degenerate one. The PiP controller
+  /// falls back to the window's bounds for nil, so a bad rect can never
+  /// strand the window on the 1x1 host that never opened it.
+  private static func pictureInPictureSourceRect(
+    _ arguments: [String: Any]
+  ) -> CGRect? {
+    guard let x = doubleValue(arguments["x"]),
+          let y = doubleValue(arguments["y"]),
+          let width = doubleValue(arguments["width"]),
+          let height = doubleValue(arguments["height"]),
+          x.isFinite, y.isFinite, width.isFinite, height.isFinite,
+          width > 0, height > 0 else {
+      return nil
+    }
+    return CGRect(x: x, y: y, width: width, height: height)
   }
 }
 
@@ -612,7 +630,11 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
   /// no picture yet. True means the request went out; the result — started,
   /// or failed to start — arrives on the event channel as a
   /// `pictureInPicture` event (see [sendPictureInPictureEvent]).
-  func startPictureInPicture() -> Bool {
+  ///
+  /// [sourceRect] is the video picture's on-screen frame, which the window
+  /// opens from. Nil falls back to the window's bounds inside the PiP
+  /// controller, so a caller that sends none still gets a real frame.
+  func startPictureInPicture(sourceRect: CGRect? = nil) -> Bool {
     guard !isDisposed else {
       return false
     }
@@ -622,7 +644,7 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     let pip = VlcPictureInPictureController(player: self) { [weak self] inPip in
       self?.sendPictureInPictureEvent(inPip)
     }
-    guard pip.start() else {
+    guard pip.start(sourceRect: sourceRect) else {
       return false
     }
     pictureInPicture = pip

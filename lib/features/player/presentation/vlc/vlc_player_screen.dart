@@ -901,6 +901,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// whole screen out from under the gesture.
   final ValueNotifier<double> _videoScale = ValueNotifier<double>(1.0);
 
+  /// The video widget's key, so the PiP source rect can be read off the
+  /// picture itself: the system needs the video's real on-screen frame to
+  /// open the window, and a 1x1 host is treated as not-displaying (see
+  /// [_videoContentRect]). Attached to the [VlcPlayer] below through a
+  /// [KeyedSubtree], so the player's own remount key is untouched.
+  final GlobalKey _videoKey = GlobalKey();
+
   /// The source sheet's own context while it is open, so Back has something to
   /// close. Null whenever the video is the only thing on screen.
   BuildContext? _sheetContext;
@@ -3723,7 +3730,99 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         _ => VlcVideoFit.contain,
       };
 
+  /// The video picture's on-screen rect, for the PiP source view.
+  ///
+  /// The system needs the picture's real frame to open the window: a 1x1
+  /// host is treated as not-displaying and `startPictureInPicture` silently
+  /// does nothing — no window, no failure callback. The [VlcPlayer] widget
+  /// fills the screen, but the picture itself is letterboxed inside it
+  /// (fit: contain), so the rect is the picture's, not the widget's: sized
+  /// to the picture, the host never draws over the app UI below or above
+  /// it either.
+  ///
+  /// Returns null when the picture cannot be measured (not laid out yet, or
+  /// no size reported); [_pipSourceRect] falls back to the screen.
+  Rect? _videoContentRect() {
+    if (_stage != _Stage.playing) return null;
+    try {
+      final context = _videoKey.currentContext;
+      if (context == null) return null;
+      final box = context.findRenderObject();
+      if (box is! RenderBox || !box.hasSize || box.size.isEmpty) return null;
+      final transform = box.getTransformTo(null);
+      final widgetRect =
+          MatrixUtils.transformRect(transform, Offset.zero & box.size);
+      if (widgetRect.isEmpty) return null;
+      final videoSize =
+          _controller.value.displayVideoSize ?? _controller.value.videoSize;
+      if (videoSize == null || videoSize.isEmpty) return widgetRect;
+      return _contentRectFor(widgetRect, videoSize, _fit);
+    } catch (_) {
+      // A render object that is not attached yet, or any other measurement
+      // failure: the caller falls back to the screen rather than stranding
+      // the window on a bad rect.
+      return null;
+    }
+  }
+
+  /// The picture inside [widgetRect], for [fit] and [videoSize].
+  ///
+  /// Pure, so it is unit-testable: contain letterboxes the picture to the
+  /// widget's shape, centred; every other fit fills the widget bounds.
+  static Rect _contentRectFor(
+    Rect widgetRect,
+    Size videoSize,
+    VlcVideoFit fit,
+  ) {
+    if (fit != VlcVideoFit.contain || videoSize.isEmpty) {
+      return widgetRect;
+    }
+    final videoAspect = videoSize.width / videoSize.height;
+    final widgetAspect = widgetRect.width / widgetRect.height;
+    if (videoAspect <= 0 || widgetAspect <= 0) return widgetRect;
+    if (videoAspect > widgetAspect) {
+      // Wider than the view: full width, black bars above and below.
+      final height = widgetRect.width / videoAspect;
+      final dy = (widgetRect.height - height) / 2;
+      return Rect.fromLTWH(
+        widgetRect.left,
+        widgetRect.top + dy,
+        widgetRect.width,
+        height,
+      );
+    }
+    // Taller than the view: full height, black bars at the sides.
+    final width = widgetRect.height * videoAspect;
+    final dx = (widgetRect.width - width) / 2;
+    return Rect.fromLTWH(
+      widgetRect.left + dx,
+      widgetRect.top,
+      width,
+      widgetRect.height,
+    );
+  }
+
+  /// The rect to hand native as the PiP source: the picture's, or the whole
+  /// screen when the picture cannot be measured. The screen is always a
+  /// real, visible frame, so a measurement failure degrades to a full-screen
+  /// source rather than the 1x1 that never opened.
+  Rect _pipSourceRect() {
+    final content = _videoContentRect();
+    if (content != null &&
+        !content.isEmpty &&
+        content.width > 0 &&
+        content.height > 0) {
+      return content;
+    }
+    final size = MediaQuery.sizeOf(context);
+    return Rect.fromLTWH(0, 0, size.width, size.height);
+  }
+
   Future<void> _enterPip() async {
+    // The picture's on-screen rect, read before the chrome comes off: the
+    // native window needs a real source frame to open from (see
+    // [_videoContentRect]), and the video widget is still laid out here.
+    final sourceRect = _pipSourceRect();
     // Set here as well as from onModeChanged, so the watchdog stands down and
     // the chrome comes off in the same frame the request is made rather than a
     // platform round trip later. A PiP surface the user has walked away from
@@ -3740,9 +3839,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       // itself, fed from the texture. False — not an error — when the device
       // cannot do PiP, and then no `pictureInPicture` event ever arrives.
       // The window opening and closing is reported back through
-      // [_onPictureInPicture].
+      // [_onPictureInPicture]. The picture's on-screen rect goes with the
+      // request, so the system has a real source frame to open from.
       entered = await _controller
-          .startPictureInPicture()
+          .startPictureInPicture(sourceRect: sourceRect)
           .catchError((Object _) => false);
     } else {
       entered = await _platform.enterPip(
@@ -5646,13 +5746,16 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
                   alignment: Alignment.center,
                   child: child,
                 ),
-                child: VlcPlayer(
-                  key: ValueKey<int>(_playerMount),
-                  controller: _controller,
-                  fit: _fit,
-                  darwinRenderer: playerDarwinRenderer,
-                  androidRenderer: playerAndroidRenderer,
-                  backgroundColor: playerBackdropColor,
+                child: KeyedSubtree(
+                  key: _videoKey,
+                  child: VlcPlayer(
+                    key: ValueKey<int>(_playerMount),
+                    controller: _controller,
+                    fit: _fit,
+                    darwinRenderer: playerDarwinRenderer,
+                    androidRenderer: playerAndroidRenderer,
+                    backgroundColor: playerBackdropColor,
+                  ),
                 ),
               ),
             ),
