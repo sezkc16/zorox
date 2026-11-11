@@ -163,11 +163,9 @@ final class VlcPictureInPictureController: NSObject {
     // (The flag was `false`, with a comment that only the button opens the
     // window - which is also why swiping home did nothing at all.)
     pipController.canStartPictureInPictureAutomaticallyFromInline = true
-    // The source frame, spelled out: where the window animates from, and
-    // where it restores to. The same view and bounds as the layer, so it
-    // cannot disagree with the content.
-    pipController.sourceView = view
-    pipController.sourceRect = view.bounds
+    // The host view's frame above is the source frame: where the window
+    // animates from, and where it restores to. There is no sourceView to
+    // set on this controller — the display layer's own view is the source.
     displayLayer = layer
     hostView = view
     self.pipController = pipController
