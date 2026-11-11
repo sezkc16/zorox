@@ -3228,6 +3228,12 @@ abstract class AppLocalizations {
   /// **'Monospace'**
   String get subtitleFontMonospace;
 
+  /// Font choice: the clean sans-serif Netflix subtitles are set in (the bundled Roboto face).
+  ///
+  /// In en, this message translates to:
+  /// **'Netflix'**
+  String get subtitleFontNetflix;
+
   /// How see-through subtitle letters are. A row of the player's Subtitle style page and of Subtitle Settings, and the title of its dialog.
   ///
   /// In en, this message translates to:

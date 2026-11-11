@@ -17,6 +17,8 @@ import 'package:vlc_player/vlc_player.dart';
 
 import '../../settings/presentation/player_settings_provider.dart';
 
+import 'subtitle_fonts.dart';
+
 /// VLC's relative font size is inverted and scale-free: the rendered height is
 /// roughly `videoHeight / relativeFontSize`, so a smaller number produces
 /// larger text. VLC's own presets run 20 (smaller) to 6 (largest), with 16 as
@@ -77,6 +79,37 @@ VlcSubtitleStyle subtitleStyleFrom(PlayerSettings settings) {
     outlineColor: const Color(0xFF000000),
     outlineThickness: subtitleOutlineThickness(settings.subtitleOutline),
     encoding: encoding.isEmpty ? null : encoding,
+  );
+}
+
+/// The style a player is *created* with: the same as [subtitleStyleFrom],
+/// except the Netflix font is the bundled face's *file path*, which is what
+/// libVLC's freetype reads. A family name it cannot resolve falls back to
+/// freetype's own default face, so the path is what makes the bundled font
+/// reach an embedded track.
+///
+/// The settings preview and the side-car subtitles keep using
+/// [subtitleStyleFrom]: Flutter draws the Netflix face from the family name,
+/// which is the same face under a different address.
+///
+/// The font, like bold and the text opacity, is a creation-time setting for
+/// libVLC: a player already playing keeps the face it was created with, and
+/// the new one takes effect the next time a video opens (see the "applies
+/// next time" note in the settings).
+VlcSubtitleStyle subtitleEngineStyleFrom(PlayerSettings settings) {
+  final style = subtitleStyleFrom(settings);
+  if (settings.subtitleFont != SubtitleFont.netflix) return style;
+  final path = netflixSubtitleFontPath;
+  if (path == null) return style;
+  return VlcSubtitleStyle(
+    fontFamily: path,
+    relativeFontSize: style.relativeFontSize,
+    color: style.color,
+    bold: style.bold,
+    backgroundColor: style.backgroundColor,
+    outlineColor: style.outlineColor,
+    outlineThickness: style.outlineThickness,
+    encoding: style.encoding,
   );
 }
 
@@ -141,6 +174,10 @@ String? subtitleFontFamily(SubtitleFont font, {TargetPlatform? platform}) {
   final on = platform ?? defaultTargetPlatform;
   return switch (font) {
     SubtitleFont.standard => null,
+    // The bundled face is the same on every platform: the family it is
+    // declared under in pubspec.yaml, so the settings preview and the
+    // side-car subtitles draw it from the bundle rather than the device.
+    SubtitleFont.netflix => kNetflixSubtitleFontFamily,
     SubtitleFont.serif => switch (on) {
       TargetPlatform.iOS ||
       TargetPlatform.macOS ||

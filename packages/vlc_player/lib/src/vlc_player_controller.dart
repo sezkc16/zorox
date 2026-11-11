@@ -644,6 +644,17 @@ class _VlcPlayerController extends VlcPlayerController
     null,
   );
 
+  /// Whether a picture-in-picture start was requested and its result has not
+  /// arrived yet.
+  ///
+  /// The native start only says the request went out; the window opening —
+  /// or failing to — is reported through [isPictureInPicture]. While the
+  /// answer is outstanding the background pause must hold off (see
+  /// [_pauseForBackground]): pausing now would stop the playback the window
+  /// is about to show. Cleared by the event, by [stopPictureInPicture], and
+  /// by a native refusal in [startPictureInPicture].
+  bool _pictureInPicturePending = false;
+
   /// Whether the iOS picture-in-picture window is up. See
   /// [VlcPlayerController.isPictureInPicture].
   final ValueNotifier<bool> _pictureInPicture = ValueNotifier<bool>(false);
@@ -931,7 +942,13 @@ class _VlcPlayerController extends VlcPlayerController
     _backgrounded = true;
     if (backgroundPolicy != VlcBackgroundPolicy.pause ||
         _pausedForBackground ||
-        _viewId == null) {
+        _viewId == null ||
+        _pictureInPicturePending ||
+        _pictureInPicture.value) {
+      // The last two are the PiP hold: a window up, or a start in flight,
+      // is a viewer still watching, and the film must not stop underneath
+      // it. The pause is applied when the attempt ends instead (see
+      // [_applyDeferredBackgroundPause]).
       return;
     }
     if (!value.isPlaying) {
@@ -1465,13 +1482,52 @@ class _VlcPlayerController extends VlcPlayerController
 
   @override
   Future<bool> startPictureInPicture() async {
+    // Set before the invoke, so the background pause (which can fire on the
+    // lifecycle listener while this round trip is in flight) sees the
+    // attempt and holds off: pausing now would stop the very playback the
+    // PiP window is about to show.
+    _pictureInPicturePending = true;
     final started = await _invokeFor<bool>('startPictureInPicture');
+    if (started != true) {
+      // The native side refused outright, so there is no event coming to
+      // clear the flag - clear it here, and let the background policy have
+      // the pause it was holding off, if the app is away.
+      _pictureInPicturePending = false;
+      _applyDeferredBackgroundPause();
+    }
     return started ?? false;
   }
 
   @override
   Future<void> stopPictureInPicture() {
-    return _invoke('stopPictureInPicture');
+    // Settles the attempt too, not just an open window: a pending attempt
+    // the screen cancelled (its watchdog, or the viewer coming straight
+    // back) must not hold the background pause off forever.
+    _pictureInPicturePending = false;
+    _applyDeferredBackgroundPause();
+    // Best effort: Android has no native stop (its PiP is an activity
+    // mode), and a player that has already gone away has, for this purpose,
+    // done what was asked. Failures are swallowed so a stop never surfaces
+    // as an error far from the call site.
+    return _invoke('stopPictureInPicture').catchError((Object _) {});
+  }
+
+  /// The background pause a PiP attempt held off, applied once the attempt is
+  /// over.
+  ///
+  /// Only while the app is actually away: in the foreground there is nothing
+  /// to pause for, and a PiP window the viewer closed by tapping it to come
+  /// back must not pause the film they are looking at. A pause that lands
+  /// just before the return is corrected by [_resumeFromBackground], which
+  /// resumes exactly what this paused.
+  void _applyDeferredBackgroundPause() {
+    final state = WidgetsBinding.instance.lifecycleState;
+    if (state != AppLifecycleState.paused &&
+        state != AppLifecycleState.hidden &&
+        state != AppLifecycleState.detached) {
+      return;
+    }
+    _pauseForBackground();
   }
 
   /// Drops every claim that would otherwise start playback on its own.
@@ -2177,7 +2233,15 @@ class _VlcPlayerController extends VlcPlayerController
     // snapshot that happens to carry the key updates the notifier on its
     // way through.
     if (event is Map && event['pictureInPicture'] is bool) {
-      _pictureInPicture.value = event['pictureInPicture'] as bool;
+      final inPip = event['pictureInPicture'] as bool;
+      // The attempt's answer, whatever it is: the window opened, or it
+      // failed to. A window that closed while the app is away leaves the
+      // background pause owing - the pause was held for the attempt, and
+      // the attempt is over - so the policy is applied if the app is still
+      // away (see [_applyDeferredBackgroundPause]).
+      _pictureInPicturePending = false;
+      _pictureInPicture.value = inPip;
+      if (!inPip) _applyDeferredBackgroundPause();
       if (!event.containsKey('state')) {
         return;
       }

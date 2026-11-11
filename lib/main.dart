@@ -25,6 +25,7 @@ import 'package:dynamic_color/dynamic_color.dart';
 
 import 'core/utils/app_utils.dart';
 import 'core/utils/linux_wakelock.dart';
+import 'features/player/domain/subtitle_fonts.dart';
 import 'features/extensions/providers/extensions_controller.dart';
 import 'core/addons/data/addon_repository.dart';
 import 'core/cloudstream/cloudstream_repository.dart';
@@ -70,6 +71,12 @@ void main() async {
   installGlobalErrorHandlers();
 
   WidgetsFlutterBinding.ensureInitialized();
+
+  // The bundled subtitle fonts (the Netflix face) must be readable files
+  // before the first player is created - libVLC's freetype reads a path,
+  // not the app's font families. A failure leaves the engine on its own
+  // default face; it never stops startup (see `subtitle_fonts.dart`).
+  await prepareBundledSubtitleFonts();
 
   // Before anything keeps the screen awake: Linux's wakelock leaked an
   // inhibitor on each repeated enable (see linux_wakelock.dart).

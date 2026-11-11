@@ -648,6 +648,22 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// and nothing else.
   bool _inPip = false;
 
+  /// The PiP attempt's watchdog: how long the window has to open.
+  ///
+  /// [_enterPip] sets [_inPip] before the native request goes out, and the
+  /// window unmounts the whole controls subtree while it is true. The native
+  /// start only says the request went out - the window opening, or failing
+  /// to, is reported through [_onPictureInPicture] - so a start the system
+  /// silently drops (no window, no event) would leave the player with no
+  /// touch handling at all until the app was backgrounded and foregrounded
+  /// again. The watchdog takes the chrome back after this long with no
+  /// confirmation, and closes the attempt.
+  Timer? _pipWatchdog;
+
+  /// Which PiP attempt the watchdog belongs to, so a stale timer cannot
+  /// undo a newer one.
+  int _pipAttempt = 0;
+
   /// Mirrors the engine's playing flag so the PiP window's middle button can be
   /// re-sent only when it actually flips.
   bool _wasPlaying = false;
@@ -832,11 +848,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// screen fit): two fingers scale the picture on top of [_fit], like
   /// MX Player / VLC. Reset to 1.0 whenever a new media opens (see
   /// [_openAttempt] and [_park]).
-  double _videoScale = 1.0;
-
-  /// The [_videoScale] at the start of the current pinch, so a new gesture
-  /// multiplies from where the last one left off instead of jumping to 1.0.
-  double _scaleStart = 1.0;
+  ///
+  /// A notifier, not a plain double: the pinch is driven by the controls'
+  /// gesture layer (see `VlcPlayerControls.videoScale`), and a ValueNotifier
+  /// lets the `Transform` repaint on every update without rebuilding the
+  /// whole screen out from under the gesture.
+  final ValueNotifier<double> _videoScale = ValueNotifier<double>(1.0);
 
   /// The source sheet's own context while it is open, so Back has something to
   /// close. Null whenever the video is the only thing on screen.
@@ -1096,7 +1113,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           adaptiveLogic: VlcAdaptiveLogic.predictive,
           adaptiveMaxHeight: _adaptiveMaxHeight,
         ),
-        subtitleStyle: subtitleStyleFrom(settings),
+        subtitleStyle: subtitleEngineStyleFrom(settings),
         // Off by default; see [PlayerDiagnostics].
         verbose: PlayerDiagnostics.verboseVlcLog,
       ),
@@ -1765,7 +1782,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (stream.url != _lastStreamUrl) _liveSegment = null;
     _lastStreamUrl = stream.url;
     // A new media starts un-zoomed (pinch-to-zoom, ZoroX v3).
-    _videoScale = 1.0;
+    _videoScale.value = 1.0;
     _isLive = isLiveSource(widget.item, stream.url);
     final languageOption = _audioLanguageOption();
     // How far ahead this media reads (spec 1.2): from its bitrate, the
@@ -2561,7 +2578,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // handed the new media over, as an open's own setup does.
     _handedToEngine = false;
     // A parked reopen starts un-zoomed too (pinch-to-zoom, ZoroX v3).
-    _videoScale = 1.0;
+    _videoScale.value = 1.0;
     try {
       await _controller.setMedia(
         VlcMediaSource(
@@ -3593,8 +3610,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// Picture-in-picture is an Android activity mode and, on iOS, a
   /// sample-buffer window fed from the VLC texture; it is meaningless on a
   /// television either way.
+  ///
+  /// The gate reads [defaultTargetPlatform] rather than `Platform.isIOS` /
+  /// `isAndroid` because only the former can be overridden by a test (see
+  /// [PlayerPlatformService.enterPip]); in production the two agree.
   bool get _pipAvailable =>
-      (Platform.isAndroid || Platform.isIOS) && _form != PlayerFormFactor.tv;
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS) &&
+      _form != PlayerFormFactor.tv;
 
   /// Only a desktop window can change size; mobile and TV are already full
   /// screen, so the affordance is absent rather than inert.
@@ -3654,7 +3677,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // window is drawn from this frame.
     _clearLock();
     final bool entered;
-    if (Platform.isIOS) {
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
       // iOS has no activity to enter: the VLC plugin opens the PiP window
       // itself, fed from the texture. False — not an error — when the device
       // cannot do PiP, and then no `pictureInPicture` event ever arrives.
@@ -3675,8 +3698,39 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Android answers false - not an error - when the user has PiP disabled
     // for the app, and then never sends onPictureInPictureModeChanged. Without
     // this the optimism above is permanent and the chrome never comes back.
-    if (entered || _disposed || !mounted || !_inPip) return;
-    setState(() => _inPip = false);
+    if (_disposed || !mounted || !_inPip) return;
+    if (!entered) {
+      setState(() => _inPip = false);
+      return;
+    }
+    // The request went out; the window opening, or failing to, is reported
+    // through [_onPictureInPicture]. If neither arrives, the watchdog takes
+    // the chrome back (see [_armPipWatchdog]).
+    _armPipWatchdog();
+  }
+
+  /// Arms the PiP watchdog for the attempt that just went out.
+  ///
+  /// The native start only says the request went out; the window opening, or
+  /// failing to, is reported through [_onPictureInPicture]. If neither
+  /// arrives, the player is left with its controls unmounted and no touch
+  /// handling at all - the screen looks frozen until the app is
+  /// backgrounded and foregrounded again. Two seconds is generous for a
+  /// window that normally opens in well under one, and short enough that a
+  /// dead attempt does not strand the viewer.
+  void _armPipWatchdog() {
+    _pipWatchdog?.cancel();
+    final attempt = ++_pipAttempt;
+    _pipWatchdog = Timer(const Duration(seconds: 2), () {
+      if (_disposed || !mounted || attempt != _pipAttempt) return;
+      // The window opened after all, or the event is already on its way.
+      if (_controller.isPictureInPicture.value || !_inPip) return;
+      // The window never opened: close the attempt and take the chrome
+      // back. The controller's stop also settles the pending flag, so a
+      // background pause the attempt held off lands if the app is away.
+      unawaited(_controller.stopPictureInPicture());
+      if (mounted && !_disposed) setState(() => _inPip = false);
+    });
   }
 
   /// The iOS PiP window opened or closed, reported through the controller.
@@ -3687,6 +3741,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// has no chip in it, so the lock clears on the way in.
   void _onPictureInPicture() {
     final inPip = _controller.isPictureInPicture.value;
+    // The attempt's answer, whatever it is: the watchdog stands down.
+    _pipWatchdog?.cancel();
+    _pipWatchdog = null;
     if (!mounted || _disposed || inPip == _inPip) return;
     if (inPip) _clearLock();
     setState(() => _inPip = inPip);
@@ -4775,8 +4832,29 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       _resetStallClock();
       // A backstop behind `pipModeChanged`: returning to the foreground is
       // what ending PiP looks like, and the chrome must come back with it
-      // whether or not the activity got round to telling us.
-      if (_inPip) setState(() => _inPip = false);
+      // whether or not the activity got round to telling us. The native
+      // attempt is stopped too, so a window that opened while the app was
+      // away does not keep floating over the film it came from, and an
+      // auto-start that never opened is cancelled rather than left to pop
+      // up after the viewer is back.
+      if (_inPip) {
+        unawaited(_controller.stopPictureInPicture());
+        setState(() => _inPip = false);
+      }
+    }
+    if (state == AppLifecycleState.inactive) {
+      // The viewer left the app mid-film - Home, the app switcher, the
+      // lock - so float the video instead of leaving it behind. Only while
+      // it is actually playing, and only where PiP exists: a paused film
+      // stays paused. A transient inactive (Control Center, a call) is
+      // taken back by the resumed branch above, which closes a window that
+      // never should have opened. The controller holds the background
+      // pause off while the attempt is in flight (see
+      // `VlcPlayerController.startPictureInPicture`), so the film does not
+      // stop underneath the window that is about to open.
+      if (!_inPip && _pipAvailable && _controller.value.isPlaying) {
+        unawaited(_enterPip());
+      }
     }
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive) {
@@ -5327,6 +5405,11 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _panelData.dispose();
     _playerSettings.dispose();
     _bufferedFraction.dispose();
+    // The pinch zoom's notifier: the controls write it through the gesture
+    // layer, and the Transform reads it through a ValueListenableBuilder.
+    // Disposed after the controls are gone, like the other notifiers they
+    // listen to.
+    _videoScale.dispose();
     _sideCars.removeListener(_onSideCars);
     _sideCars.dispose();
     unawaited(_connectivity?.cancel());
@@ -5343,6 +5426,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           : 'left',
     );
     _qoeMemory?.cancel();
+    _pipWatchdog?.cancel();
+    _pipWatchdog = null;
     _controller.pendingSeekTarget.removeListener(_qoeSeekChanged);
     _controller.pendingSeekTarget.removeListener(_onSeekSettled);
     _controller.pendingSeekTarget.removeListener(_followSeekTarget);
@@ -5481,49 +5566,31 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
               offstage:
                   PlayerDiagnostics.suppressVideoSurface ||
                   _stage != _Stage.playing,
-              // Pinch-to-zoom (ZoroX v3, range widened in v4): two fingers
-              // scale the picture on top of the fit — outwards zooms in,
-              // inwards zooms out, down to half size so the picture can
-              // be made smaller than the screen fit. onScaleUpdate only
-              // claims a two-finger gesture, so single taps still reach
-              // the controls above.
-              child: GestureDetector(
-                onScaleStart: (_) => _scaleStart = _videoScale,
-                onScaleUpdate: (details) {
-                  // details.scale is the fingers' distance relative to
-                  // the gesture's start — under 1.0 while pinching in —
-                  // so this falls as well as rises: from 1.0 an inward
-                  // pinch shrinks the picture toward 0.5, from 2.0 it
-                  // comes back down through 1.0 toward 0.5.
-                  // clamp() returns num; toDouble() keeps _videoScale a
-                  // double — assigning num to it would not compile.
-                  final double scale =
-                      (_scaleStart * details.scale).clamp(0.5, 3.0).toDouble();
-                  if (scale != _videoScale) {
-                    setState(() => _videoScale = scale);
-                  }
-                },
-                // The scale sticks where the pinch left it — no snap back
-                // to 1.0 (unless the pinch ended there). Re-clamped here
-                // so the settled value is always inside the range.
-                onScaleEnd: (_) {
-                  final double settled =
-                      _videoScale.clamp(0.5, 3.0).toDouble();
-                  if (settled != _videoScale) {
-                    setState(() => _videoScale = settled);
-                  }
-                },
-                child: Transform.scale(
-                  scale: _videoScale,
+              // Pinch-to-zoom (ZoroX v3, range widened in v4, re-homed in
+              // v8): the zoom itself is a Transform.scale over the picture,
+              // driven by [_videoScale] — but the gesture no longer lives
+              // here. A scale recognizer under the controls' screen-wide
+              // drag recognizers lost the gesture arena to them (see
+              // `VlcPlayerControls`), so two fingers mostly scrubbed the
+              // video instead of zooming it. The pinch is handled by the
+              // controls' gesture layer now, which owns the one scale
+              // recognizer for both pan and pinch; this widget only reads
+              // the value. The ValueListenableBuilder keeps a pinch at
+              // 60 fps: only the Transform repaints, not the whole screen.
+              child: ValueListenableBuilder<double>(
+                valueListenable: _videoScale,
+                builder: (context, scale, child) => Transform.scale(
+                  scale: scale,
                   alignment: Alignment.center,
-                  child: VlcPlayer(
-                    key: ValueKey<int>(_playerMount),
-                    controller: _controller,
-                    fit: _fit,
-                    darwinRenderer: playerDarwinRenderer,
-                    androidRenderer: playerAndroidRenderer,
-                    backgroundColor: playerBackdropColor,
-                  ),
+                  child: child,
+                ),
+                child: VlcPlayer(
+                  key: ValueKey<int>(_playerMount),
+                  controller: _controller,
+                  fit: _fit,
+                  darwinRenderer: playerDarwinRenderer,
+                  androidRenderer: playerAndroidRenderer,
+                  backgroundColor: playerBackdropColor,
                 ),
               ),
             ),
@@ -5565,6 +5632,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
                   // FittedBox, not through the native setFit, so the button
                   // has to reach this state to do anything there.
                   fit: _fit,
+                  // The pinch zoom's value: the controls' gesture layer
+                  // writes it (see `VlcPlayerControls.videoScale`), and the
+                  // Transform over the video reads it.
+                  videoScale: _videoScale,
                   onFitChanged: (fit) {
                     if (mounted) setState(() => _fit = fit);
                   },

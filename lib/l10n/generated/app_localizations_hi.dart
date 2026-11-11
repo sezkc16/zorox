@@ -1748,6 +1748,9 @@ class AppLocalizationsHi extends AppLocalizations {
   String get subtitleFontMonospace => 'मोनोस्पेस';
 
   @override
+  String get subtitleFontNetflix => 'Netflix';
+
+  @override
   String get subtitleTextOpacity => 'टेक्स्ट की अपारदर्शिता';
 
   @override

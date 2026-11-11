@@ -1759,6 +1759,9 @@ class AppLocalizationsKn extends AppLocalizations {
   String get subtitleFontMonospace => 'ಮೊನೊಸ್ಪೇಸ್';
 
   @override
+  String get subtitleFontNetflix => 'Netflix';
+
+  @override
   String get subtitleTextOpacity => 'ಪಠ್ಯದ ಅಪಾರದರ್ಶಕತೆ';
 
   @override

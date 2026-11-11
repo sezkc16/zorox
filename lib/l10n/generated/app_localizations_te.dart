@@ -1754,6 +1754,9 @@ class AppLocalizationsTe extends AppLocalizations {
   String get subtitleFontMonospace => 'Monospace';
 
   @override
+  String get subtitleFontNetflix => 'Netflix';
+
+  @override
   String get subtitleTextOpacity => 'Text opacity';
 
   @override

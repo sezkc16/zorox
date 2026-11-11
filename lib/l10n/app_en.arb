@@ -1178,6 +1178,10 @@
   "@subtitleFontMonospace": {
     "description": "Font choice: a typeface whose letters are all the same width, such as Courier."
   },
+  "subtitleFontNetflix": "Netflix",
+  "@subtitleFontNetflix": {
+    "description": "Font choice: the clean sans-serif Netflix subtitles are set in (the bundled Roboto face)."
+  },
   "subtitleTextOpacity": "Text opacity",
   "@subtitleTextOpacity": {
     "description": "How see-through subtitle letters are. A row of the player's Subtitle style page and of Subtitle Settings, and the title of its dialog."

@@ -129,8 +129,16 @@ final class VlcPictureInPictureController: NSObject {
       playbackDelegate: self)
     let pipController = AVPictureInPictureController(contentSource: contentSource)
     pipController.delegate = self
-    // The window never opens itself: only the viewer's button does.
-    pipController.canStartPictureInPictureAutomaticallyFromInline = false
+    // The system may start PiP itself when the viewer leaves the app while
+    // a film is playing: that is the Home-swipe path, and it needs a
+    // controller to already exist - which is also why the screen starts PiP
+    // explicitly when the app resigns active (see `VlcPlayerScreen`), rather
+    // than relying on this alone. Apple's rule for the automatic start is
+    // "a full-screen source view, or this flag": the source view here is a
+    // one-point host the viewer must never see, so the flag is what carries
+    // it. (It was `false`, with a comment that only the button opens the
+    // window - which is also why swiping home did nothing at all.)
+    pipController.canStartPictureInPictureAutomaticallyFromInline = true
     displayLayer = layer
     hostView = view
     self.pipController = pipController

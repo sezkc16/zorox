@@ -108,6 +108,7 @@ String subtitleFontLabel(AppLocalizations l10n, SubtitleFont font) =>
       SubtitleFont.standard => l10n.subtitleFontDefault,
       SubtitleFont.serif => l10n.subtitleFontSerif,
       SubtitleFont.monospace => l10n.subtitleFontMonospace,
+      SubtitleFont.netflix => l10n.subtitleFontNetflix,
     };
 
 String subtitleOpacityLabel(AppLocalizations l10n, double opacity) =>

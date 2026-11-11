@@ -81,8 +81,9 @@ enum SubtitleOutline { none, thin, normal, thick }
 ///
 /// [standard] is each renderer's own, which is what every install had before
 /// this was a setting; the others are families every platform has under some
-/// name - see `subtitleFontFamily`.
-enum SubtitleFont { standard, serif, monospace }
+/// name - see `subtitleFontFamily`. [netflix] is the bundled Roboto face, the
+/// clean grotesque Netflix subtitles are set in.
+enum SubtitleFont { standard, serif, monospace, netflix }
 
 /// The lifts the player offers for subtitles, as shares of the picture's
 /// height: at the bottom, and up to a fifth of the way up.
