@@ -1,11 +1,8 @@
-# Codemagic CI config for ZoroX (SkyStream fork, Gold & Black v2.9.1)
-# Builds an UNSIGNED iOS .ipa — same output as the GitHub Actions workflow.
-# You sign it with ESign (free Apple ID, 7-day cert) and install it.
-# Free tier: 500 Mac build minutes/month, 1 build at a time.
+
 workflows:
   ios-unsigned:
     name: ZoroX iOS (unsigned)
-    max_build_duration: 60
+    max_build_duration: 120
     instance_type: mac_mini_m2
     environment:
       flutter: 3.47.7
@@ -20,14 +17,7 @@ workflows:
     scripts:
       - name: Get Flutter packages
         script: flutter pub get
-      - name: Build iOS (release, no codesign)
-        # NOTE (2026-11-11): `flutter build ios --release --no-codesign` FAILS on
-        # Codemagic — Flutter still demands a Development Team / Provisioning
-        # Profile for a device build, even with --no-codesign (the Xcode build
-        # itself succeeds, 53.4s, then Flutter's team check kills it).
-        # Fix: configure only (writes Generated.xcconfig, no build), then build
-        # with xcodebuild directly and signing fully disabled. That bypasses
-        # Flutter's team check and produces the same unsigned Runner.app.
+      - name: Build iOS unsigned
         script: |
           flutter build ios --release --config-only
           xcodebuild -workspace ios/Runner.xcworkspace \
@@ -48,3 +38,22 @@ workflows:
           ls -lh *.ipa
     artifacts:
       - ZoroX-*.ipa
+
+  android-apk:
+    name: ZoroX Android APK
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.47.7
+    scripts:
+      - name: Configure Flutter and Android SDK
+        script: |
+          echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
+          echo "sdk.dir=$ANDROID_SDK_ROOT" >> "$CM_BUILD_DIR/android/local.properties"
+          flutter doctor -v
+      - name: Install dependencies
+        script: flutter pub get
+      - name: Build Android APK
+        script: flutter build apk --debug
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk
