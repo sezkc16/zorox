@@ -28,9 +28,6 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK and NDK
         run: |
           sdkmanager --licenses > /dev/null
