@@ -13,6 +13,7 @@ import '../../../../core/models/torrent_status.dart';
 import '../../../skip/data/skip_service.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../../domain/live_window.dart';
+import '../../domain/side_car_subtitles.dart';
 import '../../domain/skip_segments.dart';
 import '../../domain/volume_routing.dart';
 import '../player_platform_service.dart';
@@ -84,6 +85,8 @@ class VlcPlayerControls extends ConsumerStatefulWidget {
       PlayerPanelTab.audio,
       PlayerPanelTab.subtitles,
     },
+    this.hasSubtitles,
+    this.sideCars,
     this.onEnterPip,
     this.fit = VlcVideoFit.contain,
     this.onFitChanged,
@@ -143,6 +146,23 @@ class VlcPlayerControls extends ConsumerStatefulWidget {
   /// The tabs the panel would show right now. Panel buttons open only tabs
   /// that exist. Audio and Subtitles are always present.
   final Set<PlayerPanelTab> panelTabs;
+
+  /// Whether this media has a subtitle to pick - an embedded track the
+  /// engine has published, or a file the source shipped - owned by the
+  /// screen, which reads both lists. The subtitles button is only there
+  /// when there is one: the utility row has no width to spare on a handset
+  /// (one more button scrolls Options and Volume off the left edge), and a
+  /// button that opens a tab with nothing to pick is a button that does
+  /// nothing. Null where the screen does not offer one (tests), and then
+  /// the button is absent.
+  final ValueListenable<bool>? hasSubtitles;
+
+  /// The subtitle files SkyStream draws, for the subtitles button's lit
+  /// state. The engine's own track id says nothing about a file: the screen
+  /// keeps libVLC's subtitle off under one, so without this the button reads
+  /// as off while subtitles are on screen. Null where the screen does not
+  /// offer one (tests), and then the engine id alone decides.
+  final SideCarSubtitles? sideCars;
 
   /// Non-null only where picture-in-picture is actually available.
   final VoidCallback? onEnterPip;
@@ -626,6 +646,7 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
     });
 
     widget.controller.addListener(_onControllerValue);
+    widget.hasSubtitles?.addListener(_onHasSubtitlesChanged);
     if (widget.chrome == null) {
       _ownChrome = ChromeVisibilityController(
         isPlaying: () => widget.controller.value.isPlaying,
@@ -643,6 +664,14 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _claimLooseFocus());
   }
 
+  /// The screen's flag for whether this media has a subtitle to pick. The
+  /// button is in the actions list only while it is true - a hidden button
+  /// left in the list still counts as an action for the strip's width, and
+  /// on a handset that is the difference between fitting and scrolling.
+  void _onHasSubtitlesChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void didUpdateWidget(VlcPlayerControls oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -650,6 +679,10 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
     // old episode's bands, so it must not carry over.
     if (!identical(oldWidget.skipSegments, widget.skipSegments)) {
       _autoSkippedSegment = null;
+    }
+    if (oldWidget.hasSubtitles != widget.hasSubtitles) {
+      oldWidget.hasSubtitles?.removeListener(_onHasSubtitlesChanged);
+      widget.hasSubtitles?.addListener(_onHasSubtitlesChanged);
     }
     if (oldWidget.chrome == widget.chrome) return;
     // The screen swapped or withdrew its controller mid-life. Follow the new
@@ -779,6 +812,7 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
     // player without clearing it dims the whole app until the process dies.
     if (_brightnessOverridden) _brightnessControl.reset();
     widget.controller.removeListener(_onControllerValue);
+    widget.hasSubtitles?.removeListener(_onHasSubtitlesChanged);
     FocusManager.instance.removeListener(_claimLooseFocus);
     // A drag or a D-pad burst still in flight when the player goes away never
     // gets its end, and the chrome usually outlives this State, so an
@@ -2195,6 +2229,24 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
           isTv: isTv,
           onPressed: () => _open(optionsTab),
         ),
+      // The Subtitles tab on its own button. The Options button opens the
+      // panel on the first tab that exists, which for a source list is
+      // Sources - so without this, a subtitle is two taps away behind a tab
+      // a viewer has no reason to open, and a subtitle that is on but not in
+      // the viewer's language looks like no subtitle at all. Lit while one
+      // is on - the engine's track or a file SkyStream is drawing (see
+      // [_SubtitlesButton]). Only in the list while there is one to pick
+      // (see [_onHasSubtitlesChanged]): the row has no width to spare on a
+      // handset, and a hidden button still counts as an action for the
+      // strip's width.
+      if (_hasPanelTab(PlayerPanelTab.subtitles) &&
+          (widget.hasSubtitles?.value ?? false))
+        _SubtitlesButton(
+          controller: widget.controller,
+          sideCars: widget.sideCars,
+          isTv: isTv,
+          onPressed: () => _open(PlayerPanelTab.subtitles),
+        ),
       // Visible by default on every platform; the viewer can hide this
       // shortcut without changing volume gestures or keyboard controls.
       if (settings.showVolume)
@@ -3031,4 +3083,62 @@ class _HoverChromeHoldState extends State<_HoverChromeHold> {
     onExit: (_) => _release(),
     child: widget.child,
   );
+}
+/// The closed-captions button: opens the panel straight on the Subtitles
+/// tab, where the video's own tracks and the source's subtitle files are
+/// listed side by side.
+///
+/// Only in the actions list while the screen's flag says this media has one
+/// to pick (see [_VlcPlayerControlsState._onHasSubtitlesChanged]): the
+/// utility row has no width to spare on a handset, and a hidden button
+/// still counts as an action for the strip's width.
+///
+/// Lit while any subtitle is on. Two sources, and the engine's track id
+/// covers only one of them: the screen keeps libVLC's subtitle off under a
+/// file SkyStream is drawing, so a file on screen reads as off through the
+/// engine alone. The side-car list is a [ChangeNotifier], so it is read
+/// through a [ListenableBuilder]; the engine id through a
+/// [PlayerValueSelector], so a position tick four times a second is not a
+/// rebuild.
+class _SubtitlesButton extends StatelessWidget {
+  const _SubtitlesButton({
+    required this.controller,
+    required this.sideCars,
+    required this.isTv,
+    required this.onPressed,
+  });
+
+  final VlcPlayerController controller;
+  final SideCarSubtitles? sideCars;
+  final bool isTv;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    Widget button(bool on) => PlayerIconButton(
+      icon: Icons.closed_caption_outlined,
+      tooltip: l10n.subtitles,
+      isTv: isTv,
+      highlight: on,
+      onPressed: onPressed,
+    );
+    final files = sideCars;
+    if (files == null) {
+      return PlayerValueSelector<int?>(
+        controller: controller,
+        selector: (value) => value.activeSubtitleTrackId,
+        builder: (context, active) => button(active != null),
+      );
+    }
+    return ListenableBuilder(
+      listenable: files,
+      builder: (context, _) => PlayerValueSelector<int?>(
+        controller: controller,
+        selector: (value) => value.activeSubtitleTrackId,
+        builder: (context, active) =>
+            button(active != null || files.active != null),
+      ),
+    );
+  }
 }

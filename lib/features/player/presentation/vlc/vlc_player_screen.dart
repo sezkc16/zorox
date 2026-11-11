@@ -781,6 +781,52 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         _read(playerSettingsProvider).asData?.value.subtitleEncoding ?? '',
   );
 
+  /// Whether this media has a subtitle to pick - an embedded track the
+  /// engine has published, or a file the source shipped - for the
+  /// closed-captions button in the controls.
+  ///
+  /// The button is only there when there is one: the utility row has no
+  /// width to spare on a handset, and a button that opens a tab with nothing
+  /// to pick is a button that does nothing. The controls read it through a
+  /// [ValueListenableBuilder], so a change lands without rebuilding the
+  /// screen.
+  final ValueNotifier<bool> _hasSubtitles = ValueNotifier<bool>(false);
+
+  /// Whether the engine's track list, last read, held a subtitle track.
+  /// Reset per attempt, because a new media's list is unknown until the
+  /// demuxer publishes it.
+  bool _hasEmbeddedSubtitles = false;
+
+  /// The track revision the embedded flag was last read under. Null until
+  /// the first read, so the first tick after an open always reads.
+  int? _embeddedCheckedRevision;
+
+  /// Recomputes [_hasSubtitles] from the two lists that feed it: the files
+  /// the source shipped, and the embedded tracks the engine has published.
+  void _updateHasSubtitles() {
+    _hasSubtitles.value =
+        _sideCars.tracks.isNotEmpty || _hasEmbeddedSubtitles;
+  }
+
+  /// Re-reads the engine's subtitle list when it has moved, and only then:
+  /// the list fills in as the demuxer reads the file - a resumed MKV lists
+  /// its audio first and its subtitles after - so a read at open is not the
+  /// list, and the panel's own read is not this button's. A failure reads as
+  /// no tracks, which the next revision move corrects.
+  void _maybeRefreshSubtitlePresence(VlcPlayerValue value) {
+    if (!_handedToEngine) return;
+    if (value.trackRevision == _embeddedCheckedRevision) return;
+    _embeddedCheckedRevision = value.trackRevision;
+    final generation = _generation;
+    unawaited(
+      _controller.getSubtitleTracks().then((tracks) {
+        if (_disposed || generation != _generation) return;
+        _hasEmbeddedSubtitles = tracks.isNotEmpty;
+        _updateHasSubtitles();
+      }).catchError((Object _) {}),
+    );
+  }
+
   /// Whether Auto still owes this media its look for a subtitle in the
   /// viewer's language among the tracks inside the video - see
   /// [_pickPreferredSubtitle]. Armed per attempt, spent once the video has
@@ -1866,6 +1912,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Sent with the video's headers, as they were when libVLC had them
     // through the proxy: a source's subtitles sit behind the same checks as
     // its video. A local file has no use for them.
+    //
+    // A new media's embedded list is unknown until the demuxer publishes
+    // it, so the closed-captions flag starts from the files alone and the
+    // embedded half fills in on the next revision move (see
+    // [_maybeRefreshSubtitlePresence]).
+    _hasEmbeddedSubtitles = false;
+    _embeddedCheckedRevision = null;
+    _updateHasSubtitles();
     final previousSideCar = _sideCars.active;
     final sideCars = _sideCars.replaceSourceTracks([
       for (final sub in stream.subtitles ?? const <SubtitleFile>[])
@@ -2379,6 +2433,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// rather than at the next tick - see [_applySubtitleDefault].
   void _onSideCars() {
     if (_disposed) return;
+    // A file the viewer adds from the panel - the load-from-device row, the
+    // online search - lands here with no call back through the screen, so
+    // the closed-captions button's flag is kept from here too.
+    _updateHasSubtitles();
     if (_sideCars.active != null) _applySubtitleDefault(_controller.value);
   }
 
@@ -4307,6 +4365,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _rememberTracks(value);
     _maybeRestoreSubtitle(value);
     _maybePickPreferredSubtitle(value);
+    _maybeRefreshSubtitlePresence(value);
     final recorder = _recorder;
     if (recorder == null) return;
 
@@ -5410,6 +5469,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Disposed after the controls are gone, like the other notifiers they
     // listen to.
     _videoScale.dispose();
+    // The closed-captions flag: the controls read it through a
+    // ValueListenableBuilder and have already gone by here.
+    _hasSubtitles.dispose();
     _sideCars.removeListener(_onSideCars);
     _sideCars.dispose();
     unawaited(_connectivity?.cancel());
@@ -5664,6 +5726,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
                   // a button can never open a tab that does not exist.
                   onOpenPanel: (tab) => _openPanel(tab),
                   panelTabs: _panelData.value.tabs,
+                  // For the subtitles button's lit state: a file on screen
+                  // reads as off through the engine alone (see
+                  // [_SubtitlesButton]).
+                  sideCars: _sideCars,
+                  // For the subtitles button itself: only there when this
+                  // media has one to pick.
+                  hasSubtitles: _hasSubtitles,
                   onEnterPip: _pipAvailable ? _enterPip : null,
                   onToggleFullscreen: _fullscreenAvailable
                       ? _toggleFullscreen
