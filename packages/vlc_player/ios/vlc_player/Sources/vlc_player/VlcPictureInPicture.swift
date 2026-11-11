@@ -59,6 +59,28 @@ final class VlcPictureInPictureController: NSObject {
   /// Center never backgrounds the app, so this never fires for it.
   /// Registered in `init`, removed in `deinit`.
   private var backgroundObserver: NSObjectProtocol?
+  /// The Home swipe, armed at `willResignActive` and fired at
+  /// `didEnterBackground`. `willResignActive` is the last moment the run
+  /// loop is certainly live, so the arm brings the host view to the
+  /// front and waits for `isPictureInPicturePossible` to flip there;
+  /// `didEnterBackground` then opens the window at once, with no gate
+  /// left to wait on (a gate armed after the app is already away is
+  /// stranded by the suspended run loop). Control Center also resigns
+  /// active, so `didBecomeActive` disarms it again — the window only
+  /// opens for a real backgrounding.
+  private var willResignObserver: NSObjectProtocol?
+  private var didBecomeActiveObserver: NSObjectProtocol?
+  /// Armed at `willResignActive`: the host view is at the front and the
+  /// layer is presenting. Cleared by the fire (`didEnterBackground`) or
+  /// the disarm (`didBecomeActive`).
+  private var backgroundArmed = false
+  /// `isPictureInPicturePossible` is already true: the window can open
+  /// the moment the app backgrounds, with no gate to wait on.
+  private var backgroundReady = false
+  /// The arm's own wait for `isPictureInPicturePossible`. Separate from
+  /// `possibleObs` (the start gate) so an arm and a start never share
+  /// one observation.
+  private var armObs: NSKeyValueObservation?
   /// The wait for `isPictureInPicturePossible`, one-shot: it fires when the
   /// layer has presented content, which is when the system will accept a
   /// start. A start issued before that is silently dropped — no window, no
@@ -106,11 +128,34 @@ final class VlcPictureInPictureController: NSObject {
     ) { [weak self] _ in
       self?.onDidEnterBackground()
     }
+    // The arm and the disarm for the Home swipe (see above): resigning
+    // active is the last live moment to make the controller possible,
+    // and becoming active again means it was only a transient overlay.
+    willResignObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.willResignActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.onWillResignActive()
+    }
+    didBecomeActiveObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      self?.onDidBecomeActive()
+    }
   }
 
   deinit {
     if let backgroundObserver {
       NotificationCenter.default.removeObserver(backgroundObserver)
+    }
+    if let willResignObserver {
+      NotificationCenter.default.removeObserver(willResignObserver)
+    }
+    if let didBecomeActiveObserver {
+      NotificationCenter.default.removeObserver(didBecomeActiveObserver)
     }
     dispose()
   }
@@ -239,30 +284,141 @@ final class VlcPictureInPictureController: NSObject {
     pipController.startPictureInPicture()
   }
 
+  /// The app is about to resign active — a Home swipe, the app switcher,
+  /// the lock, OR a transient overlay (Control Center, a call). This is
+  /// the last moment the run loop is certainly live, so ARM here: make
+  /// the controller possible now, while there is still time. The window
+  /// itself does NOT open here — that is `didEnterBackground`'s job, so
+  /// a transient overlay never opens a window.
+  ///
+  /// The eager layer sits under Flutter's view, so it never presents and
+  /// `isPictureInPicturePossible` stays false during playback; the
+  /// system's auto-start and a gate armed after the app is already away
+  /// both strand on that. Bringing the host view to the front here —
+  /// at the window's bounds, NOT the picture's rect — lets the layer
+  /// present (the video is drawn letterboxed in the window, which is
+  /// what Flutter already draws, so the picture does not pull in), and
+  /// the wait below resolves while the run loop is still live.
+  private func onWillResignActive() {
+    guard !isActive, !wantsStart, !backgroundArmed else { return }
+    guard let player, player.textureRenderer != nil, player.pipIsPlaying else { return }
+    guard #available(iOS 15.0, *) else { return }
+    guard prepare() else { return }
+    guard let pipController = pipController else { return }
+    // To the front, at the window's bounds: see above. Re-framing to
+    // the picture's rect here is the v12 Control Center glitch (the
+    // picture pulls in with black bars).
+    if let view = hostView, let window = view.window {
+      window.addSubview(view)
+    }
+    // libVLC's audio output can reset the session after play starts;
+    // re-assert it while the app is still foreground.
+    let session = AVAudioSession.sharedInstance()
+    try? session.setCategory(.playback, mode: .moviePlayback)
+    try? session.setActive(true)
+    backgroundArmed = true
+    if pipController.isPictureInPicturePossible {
+      backgroundReady = true
+      os_log("PiP armed: already possible", log: Self.pipLog, type: .debug)
+      return
+    }
+    os_log("PiP arming: waiting for isPictureInPicturePossible", log: Self.pipLog, type: .debug)
+    armObs = pipController.observe(
+      \.isPictureInPicturePossible, options: [.initial, .new]
+    ) { [weak self] controller, _ in
+      guard let self, self.backgroundArmed, controller.isPictureInPicturePossible else { return }
+      self.backgroundReady = true
+      self.armObs?.invalidate()
+      self.armObs = nil
+      os_log("PiP armed: now possible", log: Self.pipLog, type: .debug)
+    }
+  }
+
+  /// The app came back to the foreground without backgrounding — a
+  /// transient overlay (Control Center, Notification Center, a call)
+  /// that armed at `willResignActive` but never left. Disarm: the layer
+  /// goes back under Flutter's view, the arm observation ends, and
+  /// nothing opens. The video and the lock are left exactly as they
+  /// were — this is what stops Control Center from re-framing the video
+  /// or clearing the lock.
+  private func onDidBecomeActive() {
+    guard backgroundArmed || backgroundReady else { return }
+    disarmBackground()
+  }
+
+  /// Cancels an arm: the layer goes back under Flutter's view and the
+  /// wait for `isPictureInPicturePossible` ends. The prepared controller
+  /// stays, so a later Home swipe can arm again without rebuilding.
+  private func disarmBackground() {
+    armObs?.invalidate()
+    armObs = nil
+    backgroundArmed = false
+    backgroundReady = false
+    if let view = hostView, let window = view.window {
+      window.insertSubview(view, at: 0)
+    }
+    os_log("PiP disarmed", log: Self.pipLog, type: .debug)
+  }
+
+  /// Cancels a start that is still waiting on `isPictureInPicturePossible`,
+  /// without touching the prepared controller. The host view goes back
+  /// under Flutter's view so the video is left as it was. Used when the
+  /// viewer comes straight back (the watchdog, the `resumed` handler):
+  /// the attempt ends, the eager setup stays for the next one.
+  private func cancelPendingStart() {
+    guard wantsStart else { return }
+    wantsStart = false
+    possibleObs?.invalidate()
+    possibleObs = nil
+    pipStartTimeout?.cancel()
+    pipStartTimeout = nil
+    if let view = hostView, let window = view.window {
+      window.insertSubview(view, at: 0)
+    }
+    os_log("PiP pending start cancelled", log: Self.pipLog, type: .debug)
+  }
+
   /// The app actually went away (Home, the app switcher, the lock), so
   /// open the window — like YouTube. Control Center never backgrounds
   /// the app, so this never fires for it, and a transient overlay
   /// neither re-frames the video nor clears the lock.
   ///
-  /// The Dart `inactive` handler used to start PiP for every `inactive`,
-  /// including Control Center, and it is too late for a Home swipe
-  /// anyway: by the time the Dart callback runs, the app is already
-  /// backgrounding and the gated start cannot complete. The system's
-  /// own auto-start (`canStartPictureInPictureAutomaticallyFromInline`)
-  /// is the primary mechanism; this is the backstop that starts
-  /// explicitly when it does not fire, with the same KVO gate and
-  /// three-second timeout as the button, so a start that cannot
-  /// complete reports instead of hanging. A paused film stays paused:
-  /// only a playing film floats. The Dart side holds the background
-  /// pause off from `inactive` (see `notePictureInPictureImminent`),
-  /// so the film keeps playing under the window that is about to open.
+  /// The arm (see [onWillResignActive]) already made the controller
+  /// possible while the run loop was live, so the window opens at once
+  /// here, with no gate left to wait on. A gate armed only now — after
+  /// the app is already away — is stranded by the suspended run loop,
+  /// which is why the v12 backstop alone did not open the window.
+  /// The system's own auto-start
+  /// (`canStartPictureInPictureAutomaticallyFromInline`) is still the
+  /// primary mechanism; this is the backstop that starts explicitly
+  /// when it does not fire. A paused film stays paused: only a playing
+  /// film floats. The Dart side holds the background pause off from
+  /// `inactive` (see `notePictureInPictureImminent`), so the film keeps
+  /// playing under the window that is about to open.
   private func onDidEnterBackground() {
     guard !isActive, !wantsStart else { return }
     guard let player, player.textureRenderer != nil else { return }
     guard player.pipIsPlaying else { return }
-    // No source rect: the window opens from the window's bounds, which
-    // is where the request falls back anyway, and the app is going away
-    // so the open animation's frame is the whole screen.
+    // Armed and already possible: open at once, synchronously, while
+    // the notification handler still has the run loop.
+    if backgroundReady {
+      guard #available(iOS 15.0, *) else { return }
+      backgroundArmed = false
+      backgroundReady = false
+      armObs?.invalidate()
+      armObs = nil
+      os_log("PiP firing from armed state", log: Self.pipLog, type: .debug)
+      beginPictureInPicture()
+      return
+    }
+    // Not armed, or the arm never became possible: fall back to the
+    // KVO-gated start (which brings the view to the front and waits).
+    // Cancel any arm observation first so two gates never share the
+    // property.
+    armObs?.invalidate()
+    armObs = nil
+    backgroundArmed = false
+    backgroundReady = false
     _ = start()
   }
 
@@ -288,6 +444,15 @@ final class VlcPictureInPictureController: NSObject {
   /// Closes the PiP window, if one is up. The stop completing is what reports
   /// it, through [onStateChanged]; when there is no window to close there is
   /// nothing to report.
+  ///
+  /// When nothing is open, this cancels a pending start or an arm but
+  /// KEEPS the prepared controller, layer and host view. Tearing down
+  /// here is what destroyed the eager controller every time Control
+  /// Center opened and closed (Dart calls stop on `resumed` when a start
+  /// was held as imminent but no window opened), so the next Home swipe
+  /// had no controller and the auto-start could not fire. A stop that
+  /// destroys the eager setup is not a no-op, whatever the caller
+  /// assumed. Only `dispose()` (the player going away) fully tears down.
   func stop() {
     guard let pipController else {
       return
@@ -295,9 +460,8 @@ final class VlcPictureInPictureController: NSObject {
     if pipController.isPictureInPictureActive {
       pipController.stopPictureInPicture()
     } else {
-      // Asked to stop before the start landed, or after it failed: no
-      // didStop is coming, so the feed ends here.
-      teardown()
+      cancelPendingStart()
+      disarmBackground()
     }
   }
 
@@ -390,10 +554,12 @@ final class VlcPictureInPictureController: NSObject {
     pipController.delegate = self
     // The system may start PiP itself when the viewer leaves the app while
     // a film is playing: that is the Home-swipe path, and it needs a
-    // controller to already exist - which is also why the screen starts PiP
-    // explicitly when the app resigns active (see `VlcPlayerScreen`), rather
-    // than relying on this alone. The flag is the system's own auto-start
-    // backstop; the Dart-side start on `inactive` is the primary mechanism.
+    // controller to already exist and be possible before the app goes
+    // away — which is why the controller is armed at `willResignActive`
+    // (see `onWillResignActive`), not built on tap. The flag is the
+    // system's own auto-start; the `didEnterBackground` fire is the
+    // backstop when it does not fire. The Dart-side start on `inactive`
+    // is deliberately NOT used: `inactive` fires for Control Center too.
     // (The flag was `false`, with a comment that only the button opens the
     // window - which is also why swiping home did nothing at all.)
     pipController.canStartPictureInPictureAutomaticallyFromInline = true
@@ -546,6 +712,10 @@ final class VlcPictureInPictureController: NSObject {
   /// cancelled here too: a pending start must not pop a window up after the
   /// viewer has already come back to the full player.
   private func teardown() {
+    armObs?.invalidate()
+    armObs = nil
+    backgroundArmed = false
+    backgroundReady = false
     possibleObs?.invalidate()
     possibleObs = nil
     pipStartTimeout?.cancel()

@@ -1303,6 +1303,23 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   void _restyleSubtitles(PlayerSettings settings) {
     final look = _anchoredSubtitleLook(settings);
     if (look == _sentLook) return;
+    // Hysteresis: the anchored raise is a double from on-screen
+    // geometry, and exact equality would re-send it for sub-pixel
+    // changes (a rotation settling, a size re-report) — a look whose
+    // lift moved by a pixel or two, which is the shake the viewer
+    // reported. Only send when the size changed or the lift moved by a
+    // real amount (a hundredth of the picture's height); everything
+    // else in the look comes from settings and is exact.
+    final sent = _sentLook;
+    if (sent != null &&
+        look.textScale == sent.textScale &&
+        look.color == sent.color &&
+        look.backgroundColor == sent.backgroundColor &&
+        look.backgroundOpacity == sent.backgroundOpacity &&
+        look.outlineThickness == sent.outlineThickness &&
+        (look.raise - sent.raise).abs() <= 0.01) {
+      return;
+    }
     _sentLook = look;
     unawaited(
       _controller.setSubtitleLook(look).catchError((Object _) => false),
@@ -1348,7 +1365,13 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       return plain;
     }
     if (screen.isEmpty) return plain;
-    final chromeUp = _chrome.value && !_inPip && _pictureUp && _ended == null;
+    // Fixed target: the lines sit at one place — just above where the
+    // bottom controls appear — whether or not the chrome is currently
+    // up. Letting the target follow the chrome (the controls' height
+    // while up, 0 while down) made the lines jump between two places
+    // every time the bars showed or hid, which the viewer reported as
+    // the subtitle shaking. When the bars are down the lines sit a
+    // little higher, with empty space below them; they never move.
     return subtitleLookAnchored(
       settings,
       createdRelativeSize: _createdRelativeSize,
@@ -1356,11 +1379,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       video: videoSize,
       fit: _fit,
       pinchScale: _videoScale.value,
-      bottomInset: chromeUp
-          ? HotstarPlayerStyle.bottomChromeHeightFor(
-              isTv: _form == PlayerFormFactor.tv,
-            )
-          : 0,
+      bottomInset: HotstarPlayerStyle.bottomChromeHeightFor(
+        isTv: _form == PlayerFormFactor.tv,
+      ),
     );
   }
 
