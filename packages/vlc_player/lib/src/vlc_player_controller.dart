@@ -251,6 +251,17 @@ abstract class VlcPlayerController extends ValueNotifier<VlcPlayerValue> {
   /// mode the host screen tracks itself, so this stays false there.
   ValueListenable<bool> get isPictureInPicture;
 
+  /// The last picture-in-picture failure, in the native side's words, and
+  /// whether a start would be accepted right now — the debug line the player
+  /// shows when a start fails, so a silent button has a reason on screen.
+  /// Null when no attempt has been made, or the last one succeeded.
+  String? get lastPipError;
+
+  /// Whether the native controller would accept a start right now
+  /// (`isPictureInPicturePossible`), as last reported with a PiP event.
+  /// Null before any PiP event has arrived.
+  bool? get lastPipPossible;
+
   /// Seeks to [position].
   ///
   /// [position] must be non-negative. [pendingSeekTarget] moves to it at once.
@@ -666,6 +677,18 @@ class _VlcPlayerController extends VlcPlayerController
 
   @override
   ValueListenable<bool> get isPictureInPicture => _pictureInPicture;
+
+  /// The last picture-in-picture failure the native side reported, and
+  /// whether a start would be accepted right now. See
+  /// [VlcPlayerController.lastPipError].
+  String? _lastPipError;
+  bool? _lastPipPossible;
+
+  @override
+  String? get lastPipError => _lastPipError;
+
+  @override
+  bool? get lastPipPossible => _lastPipPossible;
 
   /// The published position the pending seek set out from - in a chain of
   /// steps, the previous step's target - so an earlier step landing late is
@@ -2256,6 +2279,15 @@ class _VlcPlayerController extends VlcPlayerController
       // away (see [_applyDeferredBackgroundPause]).
       _pictureInPicturePending = false;
       _pictureInPicture.value = inPip;
+      // A failed start carries its reason (`pipError`) and whether a start
+      // would be accepted right now (`pipPossible`): the debug line the
+      // player shows when a start fails. A window that opened clears the
+      // failure.
+      final pipError = event['pipError'];
+      if (pipError is String) _lastPipError = pipError;
+      final pipPossible = event['pipPossible'];
+      if (pipPossible is bool) _lastPipPossible = pipPossible;
+      if (inPip) _lastPipError = null;
       if (!inPip) _applyDeferredBackgroundPause();
       if (!event.containsKey('state')) {
         return;

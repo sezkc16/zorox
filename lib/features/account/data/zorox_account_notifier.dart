@@ -724,20 +724,37 @@ class ZoroxAccountNotifier extends Notifier<ZoroxAccountState> {
     return (path: file.path, openedShareSheet: true);
   }
 
+  /// True while a backup import is running. The UI answers a second tap
+  /// with "already running" instead of silence: the old `importBackupFile()`
+  /// returned null for a tap that landed mid-import, which the UI read as
+  /// "user cancelled". (The guard covers the pick; the UI's progress dialog
+  /// covers the restore that follows it.)
+  bool get importInProgress => _importInProgress;
+
   /// Picks a backup file and restores it. Returns the restore report, or
   /// null when the user cancels the picker. Throws [ZoroxSyncException]
   /// when the file is not a ZoroX backup.
   Future<ZoroxRestoreReport?> importBackupFile() async {
+    final backup = await pickBackupFile();
+    if (backup == null) return null;
+    return await restoreBackup(backup);
+  }
+
+  /// Picks a backup file and parses it, without restoring it — so the UI can
+  /// show progress while the (slow, network) restore runs. Returns null when
+  /// the user cancels the picker. Throws [ZoroxSyncException] when the file
+  /// is not a ZoroX backup, [PlatformException] when the picker itself fails.
+  Future<ZoroxBackup?> pickBackupFile() async {
     if (_importInProgress) return null;
     _importInProgress = true;
     try {
-      return await _importBackupFile();
+      return await _pickBackupFile();
     } finally {
       _importInProgress = false;
     }
   }
 
-  Future<ZoroxRestoreReport?> _importBackupFile() async {
+  Future<ZoroxBackup?> _pickBackupFile() async {
     try {
       // file_picker throws PlatformException(multiple_request) when a pick
       // is started while another pick is still open (a stale pending
@@ -760,10 +777,7 @@ class ZoroxAccountNotifier extends Notifier<ZoroxAccountState> {
       if (decoded is! Map) {
         throw const ZoroxSyncException('That file is not a ZoroX backup.');
       }
-      final backup = ZoroxBackup.fromJson(
-        Map<String, dynamic>.from(decoded),
-      );
-      return await restoreBackup(backup);
+      return ZoroxBackup.fromJson(Map<String, dynamic>.from(decoded));
     } on PlatformException catch (e) {
       if (e.code == 'multiple_request') {
         throw const ZoroxSyncException(

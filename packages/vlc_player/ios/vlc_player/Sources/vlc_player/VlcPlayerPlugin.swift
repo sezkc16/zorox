@@ -593,6 +593,11 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     if autoPlay {
       acquireAudioSession()
       mediaPlayer.play()
+      // The PiP controller is built now, not on tap: the window can only
+      // open once the layer has presented content, and the Home-swipe
+      // auto-start needs a controller that already exists and is possible
+      // before the app goes away.
+      preparePictureInPicture()
     }
     result(nil)
   }
@@ -603,6 +608,7 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     // explains what the player is doing.
     interruption = "none"
     mediaPlayer.play()
+    preparePictureInPicture()
     sendSnapshot()
   }
 
@@ -634,6 +640,12 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
   /// [sourceRect] is the video picture's on-screen frame, which the window
   /// opens from. Nil falls back to the window's bounds inside the PiP
   /// controller, so a caller that sends none still gets a real frame.
+  ///
+  /// The controller is normally the eager one [preparePictureInPicture]
+  /// built when playback started; this builds one on tap when that never
+  /// ran. Either way the start itself is gated on
+  /// `isPictureInPicturePossible` inside the controller, so a fresh
+  /// controller is never asked to start before the system will accept it.
   func startPictureInPicture(sourceRect: CGRect? = nil) -> Bool {
     guard !isDisposed else {
       return false
@@ -641,14 +653,38 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     if let pictureInPicture, pictureInPicture.isActive {
       return true
     }
-    let pip = VlcPictureInPictureController(player: self) { [weak self] inPip in
-      self?.sendPictureInPictureEvent(inPip)
+    if pictureInPicture == nil {
+      pictureInPicture = makePictureInPictureController()
     }
-    guard pip.start(sourceRect: sourceRect) else {
+    guard let pip = pictureInPicture, pip.start(sourceRect: sourceRect) else {
       return false
     }
-    pictureInPicture = pip
     return true
+  }
+
+  /// Builds the PiP controller, layer and host view now, so a controller
+  /// already exists — and is already possible — by the time the viewer taps
+  /// PiP or leaves the app. Called when playback starts (see [play] and the
+  /// autoplay branch of [setSource]); idempotent, and a no-op when the device
+  /// cannot do PiP. The `canStartPictureInPictureAutomaticallyFromInline`
+  /// auto-start only works when the controller exists and is possible BEFORE
+  /// the app goes away, and a controller built on tap has neither.
+  func preparePictureInPicture() {
+    guard !isDisposed else {
+      return
+    }
+    if pictureInPicture == nil {
+      pictureInPicture = makePictureInPictureController()
+    }
+    if #available(iOS 15.0, *) {
+      _ = pictureInPicture?.prepare()
+    }
+  }
+
+  private func makePictureInPictureController() -> VlcPictureInPictureController {
+    VlcPictureInPictureController(player: self) { [weak self] inPip, error in
+      self?.sendPictureInPictureEvent(inPip, error: error)
+    }
   }
 
   /// Closes the iOS picture-in-picture window, if one is up. The
@@ -662,11 +698,21 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
   ///
   /// A minimal event, not a snapshot: Dart reads the `pictureInPicture` key
   /// off it directly, so a PiP-only event never disturbs the published value.
-  func sendPictureInPictureEvent(_ inPip: Bool) {
+  /// A failed start also carries `pipError` (the failure in the system's
+  /// words) and `pipPossible` (whether a start would be accepted right now) —
+  /// the debug line Dart shows when a start fails.
+  func sendPictureInPictureEvent(_ inPip: Bool, error: String? = nil) {
     guard !isDisposed else {
       return
     }
-    eventHandler.send(["pictureInPicture": inPip])
+    var event: [String: Any] = ["pictureInPicture": inPip]
+    if let error {
+      event["pipError"] = error
+    }
+    if #available(iOS 15.0, *), let pip = pictureInPicture {
+      event["pipPossible"] = pip.isPictureInPicturePossible
+    }
+    eventHandler.send(event)
   }
 
   /// Whether the transport is playing, for the PiP window's play/pause.
@@ -684,11 +730,13 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     seekTo(milliseconds: Int(clamped * 1000))
   }
 
-  /// The scrub range the PiP window draws, or invalid when the media has no
-  /// length to draw from.
+  /// The scrub range the PiP window draws, or open-ended when the media has
+  /// no length to draw from yet. An invalid range makes the system treat the
+  /// playback delegate as broken, so a stream with no length reports an
+  /// unbounded range instead — the safe default for live-style content.
   func pipTimeRange() -> CMTimeRange {
     guard let length = mediaPlayer.media?.length, length.intValue > 0 else {
-      return CMTimeRange(start: .invalid, duration: .invalid)
+      return CMTimeRange(start: .negativeInfinity, duration: .positiveInfinity)
     }
     return CMTimeRange(
       start: .zero,

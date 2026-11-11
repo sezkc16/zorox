@@ -112,7 +112,9 @@ class ZoroxBackup {
 
 /// What a restore did, for the confirmation toast: counts of what came
 /// back, and one line per thing that could not be restored (a plugin its
-/// repository no longer lists, a repository that would not load).
+/// repository no longer lists, a repository that would not load). It always
+/// starts with "Import successful", so the toast answers the question the
+/// viewer is asking — whether the import worked — before the detail.
 class ZoroxRestoreReport {
   const ZoroxRestoreReport({
     this.historyRestored = 0,
@@ -163,10 +165,12 @@ class ZoroxRestoreReport {
       // that plainly, instead of the vague "Nothing new", so the user can
       // tell an empty backup from a restore that skipped what was already
       // on this device (historyInBackup > 0, all skipped = already here).
-      if (historyInBackup == 0) return 'This backup has no watch history.';
-      return 'Nothing new to restore.';
+      if (historyInBackup == 0) {
+        return 'Import successful — this backup has no watch history.';
+      }
+      return 'Import successful — nothing new to restore.';
     }
-    return 'Restored ${parts.join(', ')}.';
+    return 'Import successful — restored ${parts.join(', ')}.';
   }
 }
 

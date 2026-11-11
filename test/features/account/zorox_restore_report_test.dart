@@ -2,7 +2,10 @@
 /// that found nothing new: a backup exported from an empty app holds no
 /// history at all, so the toast says so plainly instead of the vague
 /// "Nothing new to restore." — otherwise the user cannot tell an empty
-/// backup from a broken restore (the v6 Import bug).
+/// backup from a broken restore (the v6 Import bug). And it must start with
+/// "Import successful": the viewer asked whether the import worked, and the
+/// toast answers that before the detail (the v10 Import bug: no confirmation
+/// appeared at all).
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:skystream/features/account/data/zorox_backup.dart';
@@ -10,7 +13,10 @@ import 'package:skystream/features/account/data/zorox_backup.dart';
 void main() {
   test('empty backup says it has no watch history', () {
     const report = ZoroxRestoreReport(historyInBackup: 0);
-    expect(report.summary, 'This backup has no watch history.');
+    expect(
+      report.summary,
+      'Import successful — this backup has no watch history.',
+    );
   });
 
   test('backup with history already on device says nothing new', () {
@@ -18,7 +24,7 @@ void main() {
       historyInBackup: 3,
       historySkipped: 3,
     );
-    expect(report.summary, 'Nothing new to restore.');
+    expect(report.summary, 'Import successful — nothing new to restore.');
   });
 
   test('restored history is counted', () {
@@ -26,7 +32,7 @@ void main() {
       historyRestored: 2,
       historyInBackup: 2,
     );
-    expect(report.summary, 'Restored 2 history items.');
+    expect(report.summary, 'Import successful — restored 2 history items.');
   });
 
   test('a real restore is not hidden by an empty history', () {
@@ -34,6 +40,6 @@ void main() {
       historyInBackup: 0,
       skystreamPluginsRestored: 2,
     );
-    expect(report.summary, 'Restored 2 plugins.');
+    expect(report.summary, 'Import successful — restored 2 plugins.');
   });
 }

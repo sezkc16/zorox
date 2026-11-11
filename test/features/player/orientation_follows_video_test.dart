@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -232,6 +233,47 @@ void main() {
           'a rotation-blind size is not evidence, and a coin flip behind a '
           'device rotation is worse than leaving the handset alone',
     );
+
+    await tester.pumpWidget(const SizedBox());
+  }, variant: texturePlatform);
+
+  testWidgets('on iOS a track-only size still pins (VideoToolbox reports no rendered size)', (
+    tester,
+  ) async {
+    // iOS's VideoToolbox path reports no coded buffer, so `displayVideoSize`
+    // is null for every hardware-decoded film — without the fallback the pin
+    // would never fire on iOS at all. The demuxer's size is the only shape
+    // there, and a film with no rotation matrix is shaped exactly that way.
+    // The test above keeps the rule for every other backend: their
+    // `videoSize` is equally blind, and a missing rendered size pins
+    // nothing there.
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      await pumpPhone(tester);
+      await settle(tester);
+      pinned.clear();
+
+      await sendEvent(
+        tester,
+        event(position: 1500, track: const Size(1920, 1080)),
+      );
+      await waitOutSettle(tester);
+      await sendEvent(
+        tester,
+        event(position: 2500, track: const Size(1920, 1080)),
+      );
+      await waitOutSettle(tester);
+
+      expect(
+        pinned,
+        [landscape],
+        reason:
+            'on iOS the track size is the only shape VideoToolbox leaves, '
+            'and a landscape film must still turn the handset',
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
 
     await tester.pumpWidget(const SizedBox());
   }, variant: texturePlatform);

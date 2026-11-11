@@ -343,16 +343,17 @@ class PlayerPlatformService {
   /// The player's own decision, until the viewer presses rotate: from then to
   /// the end of that video [flipOrientation] has the say.
   ///
-  /// [renderedSize] must be `VlcPlayerValue.displayVideoSize` and never
-  /// `VlcPlayerValue.videoSize`. `videoSize` is the elementary stream's
-  /// declared width and height and carries no rotation, so a clip shot in
-  /// portrait on a handset — landscape frames plus a 90° rotation matrix — is
-  /// reported as 1920x1080 and would turn the device the wrong way.
-  /// `displayVideoSize` resolves the rotation: Android applies libVLC's
-  /// `ORIENT_IS_SWAP` test to `IMedia.VideoTrack.orientation`, and Darwin's
-  /// texture path reports a coded buffer that `vmem.c` has already run
-  /// `video_format_ApplyRotation` over. A backend that offers neither reports
-  /// null, and then this pins nothing rather than guessing.
+  /// [renderedSize] is `VlcPlayerValue.displayVideoSize` where the backend
+  /// reports one. The screen falls back to `VlcPlayerValue.videoSize` on iOS
+  /// only, when the platform reports no rotation-aware size: on iOS,
+  /// VideoToolbox (hardware-decoded) video reports no coded size at all, so
+  /// without the fallback the pin would never fire there. `videoSize` is the
+  /// visible size the demuxer declared, which is the right shape for a video
+  /// with no rotation matrix; a portrait clip stored as landscape frames plus
+  /// a 90 degree matrix would pin the wrong way, and the rotate button
+  /// overrides it. Other backends pin from `displayVideoSize` alone: Android's
+  /// `videoSize` is equally rotation-blind, and there a missing rendered size
+  /// pins nothing rather than guessing.
   ///
   /// A shape has to hold for [shapeSettleDelay] before it is believed, because
   /// libVLC revises the track it reports during startup. An unknown size —
@@ -361,9 +362,12 @@ class PlayerPlatformService {
   /// swing back between two episodes; and only a changed verdict is sent, so
   /// an HLS variant switch inside one landscape film stays silent.
   ///
-  /// This overrides the OS rotation lock, which neither platform exposes a way
-  /// to detect. The pin is always a pair, so the handset can still be turned
-  /// end for end, and [restoreOrientation] undoes it on the way out.
+  /// This does NOT override the OS rotation lock: with iOS Portrait
+  /// Orientation Lock on, the scene refuses the geometry update and the film
+  /// stays portrait — the lock has to come off in Control Center. Neither
+  /// platform exposes a way to detect the lock, so there is no warning to
+  /// show. The pin is always a pair, so the handset can still be turned end
+  /// for end, and [restoreOrientation] undoes it on the way out.
   void applyVideoOrientation(
     PlayerFormFactor form, {
     required Size? renderedSize,
@@ -386,6 +390,9 @@ class PlayerPlatformService {
     final wanted = renderedSize.width >= renderedSize.height
         ? Orientation.landscape
         : Orientation.portrait;
+    // A final copy for the settle timer below: the closure cannot see the
+    // null-check promotion on the parameter itself.
+    final size = renderedSize;
     // Already waiting on this verdict. Let the clock run rather than restart
     // it, or a film that ticks four times a second would never settle.
     if (wanted == _shapeCandidate) return;
@@ -397,6 +404,11 @@ class PlayerPlatformService {
       _shapeCandidate = null;
       _orientationBeforePin ??= _viewOrientation();
       _pinnedOrientation = wanted;
+      if (kDebugMode) {
+        debugPrint(
+          'PlayerPlatformService: pinning $wanted for ${size.width}x${size.height}',
+        );
+      }
       unawaited(
         _pinAndTurn(
           wanted == Orientation.landscape ? _landscape : _portrait,

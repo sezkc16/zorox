@@ -96,8 +96,10 @@ void main() {
       );
 
       // The window never opens and no event ever arrives: the film keeps
-      // playing, past the two-second watchdog, and the chrome comes back.
-      await keepPlaying(tester, 6);
+      // playing, past the five-second watchdog, and the chrome comes back.
+      // Five seconds, not two: the native side's own three-second timeout
+      // must report first, so the watchdog is only the backstop.
+      await keepPlaying(tester, 13);
       await tester.pump();
       expect(
         find.byType(VlcPlayerControls),
@@ -106,6 +108,11 @@ void main() {
             'a silently dropped PiP start left the player with no touch '
             'handling at all',
       );
+
+      // The watchdog also tells the viewer the attempt failed, and that
+      // toast's own dismiss timer (three seconds) must run out before the
+      // tree is disposed, or the test ends with a timer still pending.
+      await tester.pump(const Duration(seconds: 4));
 
       await tester.pumpWidget(const SizedBox());
     },
@@ -122,10 +129,10 @@ void main() {
       expect(find.byType(VlcPlayerControls), findsNothing);
 
       // The window opened: the engine says so, which stands the watchdog
-      // down. The film keeps playing past two seconds and the chrome stays
+      // down. The film keeps playing past five seconds and the chrome stays
       // off - the window, not the screen, is showing the film now.
       await sendEvent(tester, <String, Object?>{'pictureInPicture': true});
-      await keepPlaying(tester, 6);
+      await keepPlaying(tester, 13);
       await tester.pump();
       expect(
         find.byType(VlcPlayerControls),

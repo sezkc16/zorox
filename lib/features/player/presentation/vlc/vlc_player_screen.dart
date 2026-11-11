@@ -31,6 +31,7 @@ import '../../../../core/models/tmdb_details.dart';
 import '../../../../core/models/torrent_status.dart';
 import '../../../../core/services/download_service.dart';
 import '../../../../core/services/local_proxy_service.dart';
+import '../../../../core/services/notification_service.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/utils/app_utils.dart';
@@ -658,11 +659,28 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// touch handling at all until the app was backgrounded and foregrounded
   /// again. The watchdog takes the chrome back after this long with no
   /// confirmation, and closes the attempt.
+  ///
+  /// Five seconds, deliberately longer than the native side's own three:
+  /// the native gate gives up at three seconds and reports the failure
+  /// itself, so the watchdog only ever fires when no event arrived at all —
+  /// and the two must never race to restore the chrome.
   Timer? _pipWatchdog;
 
   /// Which PiP attempt the watchdog belongs to, so a stale timer cannot
   /// undo a newer one.
   int _pipAttempt = 0;
+
+  /// Whether the PiP attempt in flight came from the PiP button (true) or
+  /// from leaving the app (false). Only a button tap gets a "didn't open"
+  /// message: an auto-start that fails while the app is away is not something
+  /// the viewer is looking at, and a message for it would land on the Home
+  /// screen when they come back.
+  bool _pipAttemptFromButton = false;
+
+  /// Whether the window actually opened for the attempt in flight. A false
+  /// `pictureInPicture` event with this still false means the start failed,
+  /// not that the viewer closed a window — the two need different words.
+  bool _pipWindowOpened = false;
 
   /// Mirrors the engine's playing flag so the PiP window's middle button can be
   /// re-sent only when it actually flips.
@@ -3818,11 +3836,18 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     return Rect.fromLTWH(0, 0, size.width, size.height);
   }
 
-  Future<void> _enterPip() async {
+  Future<void> _enterPip({bool fromButton = false}) async {
     // The picture's on-screen rect, read before the chrome comes off: the
     // native window needs a real source frame to open from (see
     // [_videoContentRect]), and the video widget is still laid out here.
     final sourceRect = _pipSourceRect();
+    _pipAttemptFromButton = fromButton;
+    _pipWindowOpened = false;
+    if (kDebugMode) {
+      debugPrint(
+        'VlcPlayerScreen: PiP requested (fromButton: $fromButton, sourceRect: $sourceRect)',
+      );
+    }
     // Set here as well as from onModeChanged, so the watchdog stands down and
     // the chrome comes off in the same frame the request is made rather than a
     // platform round trip later. A PiP surface the user has walked away from
@@ -3858,6 +3883,19 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // this the optimism above is permanent and the chrome never comes back.
     if (_disposed || !mounted || !_inPip) return;
     if (!entered) {
+      if (kDebugMode) {
+        debugPrint('VlcPlayerScreen: PiP refused by the native side');
+      }
+      if (fromButton) {
+        // The native side refused outright (no PiP support, no picture):
+        // say so, instead of the button silently doing nothing.
+        ref
+            .read(notificationServiceProvider)
+            .showInfo(
+              'Picture-in-picture isn\'t available for this video right now.',
+              title: 'Picture-in-picture',
+            );
+      }
       setState(() => _inPip = false);
       return;
     }
@@ -3873,19 +3911,40 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// failing to, is reported through [_onPictureInPicture]. If neither
   /// arrives, the player is left with its controls unmounted and no touch
   /// handling at all - the screen looks frozen until the app is
-  /// backgrounded and foregrounded again. Two seconds is generous for a
-  /// window that normally opens in well under one, and short enough that a
-  /// dead attempt does not strand the viewer.
+  /// backgrounded and foregrounded again. Five seconds is the backstop
+  /// behind the native side's own three: the native gate gives up at three
+  /// seconds and reports the failure itself, so this only fires when no
+  /// event arrived at all - and the two must never race to restore the
+  /// chrome.
   void _armPipWatchdog() {
     _pipWatchdog?.cancel();
     final attempt = ++_pipAttempt;
-    _pipWatchdog = Timer(const Duration(seconds: 2), () {
+    _pipWatchdog = Timer(const Duration(seconds: 5), () {
       if (_disposed || !mounted || attempt != _pipAttempt) return;
       // The window opened after all, or the event is already on its way.
       if (_controller.isPictureInPicture.value || !_inPip) return;
       // The window never opened: close the attempt and take the chrome
       // back. The controller's stop also settles the pending flag, so a
       // background pause the attempt held off lands if the app is away.
+      // No event arrived at all — the native side's own three-second
+      // timeout should have reported first — so say so, instead of the
+      // button silently doing nothing.
+      if (kDebugMode) {
+        debugPrint(
+          'VlcPlayerScreen: PiP watchdog fired — the window never opened '
+          '(possible: ${_controller.lastPipPossible}, error: ${_controller.lastPipError})',
+        );
+      }
+      final fromButton = _pipAttemptFromButton;
+      _pipAttemptFromButton = false;
+      if (fromButton) {
+        ref
+            .read(notificationServiceProvider)
+            .showInfo(
+              'Picture-in-picture didn\'t open for this video.',
+              title: 'Picture-in-picture',
+            );
+      }
       unawaited(_controller.stopPictureInPicture());
       if (mounted && !_disposed) setState(() => _inPip = false);
     });
@@ -3903,7 +3962,35 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _pipWatchdog?.cancel();
     _pipWatchdog = null;
     if (!mounted || _disposed || inPip == _inPip) return;
-    if (inPip) _clearLock();
+    if (inPip) {
+      _pipWindowOpened = true;
+      _pipAttemptFromButton = false;
+      _clearLock();
+    } else if (_pipAttemptFromButton && !_pipWindowOpened) {
+      // The window never opened: the attempt failed after the native side
+      // had accepted it. A closed window reports the same event, but then
+      // [_pipWindowOpened] is true and nothing is said. The native side's
+      // failure, in its words, rides the event (`lastPipError`) with whether
+      // a start would be accepted right now (`lastPipPossible`) — the debug
+      // line, shown here so a silent button has a reason the viewer can
+      // report.
+      final error = _controller.lastPipError;
+      if (kDebugMode) {
+        debugPrint(
+          'VlcPlayerScreen: PiP failed to open after the native side accepted it '
+          '(possible: ${_controller.lastPipPossible}, error: $error)',
+        );
+      }
+      _pipAttemptFromButton = false;
+      ref
+          .read(notificationServiceProvider)
+          .showInfo(
+            error == null || error.isEmpty
+                ? 'Picture-in-picture didn\'t open for this video.'
+                : 'Picture-in-picture didn\'t open: $error',
+            title: 'Picture-in-picture',
+          );
+    }
     setState(() => _inPip = inPip);
   }
 
@@ -4871,11 +4958,18 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
 
   /// Points the device the way the video is shaped.
   ///
-  /// `displayVideoSize` rather than `videoSize`, which does not know which way
-  /// up the picture is: a portrait clip is stored as landscape frames plus a
-  /// 90 degree matrix, so pinning from `videoSize` would turn the device the
-  /// wrong way. A backend that knows neither reports null and this pins
-  /// nothing.
+  /// `displayVideoSize` first: it is rotation-aware. On iOS it is null for
+  /// VideoToolbox (hardware-decoded) video — the texture's CodedSize is zero
+  /// by design there, so `displayVideoSize` has no source and the pin would
+  /// never fire at all — so iOS falls back to `videoSize`, the visible size
+  /// the demuxer declared. The fallback is iOS-only: on Android `videoSize`
+  /// is equally rotation-blind (a platform view, no coded buffer), and the
+  /// pinned rule there stays "no rotation-aware size pins nothing" (see
+  /// `orientation_follows_video_test.dart: a backend that reports no
+  /// rendered size pins nothing`). A portrait clip stored as landscape
+  /// frames plus a 90 degree matrix would pin from `videoSize` the wrong
+  /// way; that clip is not what this player is fed, and the rotate button
+  /// overrides it.
   ///
   /// [PlayerFormFactor.tv] and [PlayerFormFactor.desktop] are excluded:
   /// `setPreferredOrientations` has no handler in the macOS, Windows or Linux
@@ -4894,7 +4988,12 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     if (_handedBack || !_handedToEngine) return;
     _platform.applyVideoOrientation(
       _form,
-      renderedSize: value.displayVideoSize,
+      // iOS only: VideoToolbox reports no rotation-aware size, so the
+      // demuxer's size is the only shape there. Every other backend pins
+      // from `displayVideoSize` alone — a rotation-blind size pins nothing.
+      renderedSize: defaultTargetPlatform == TargetPlatform.iOS
+          ? value.displayVideoSize ?? value.videoSize
+          : value.displayVideoSize,
     );
   }
 
@@ -5836,7 +5935,9 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
                   // For the subtitles button itself: only there when this
                   // media has one to pick.
                   hasSubtitles: _hasSubtitles,
-                  onEnterPip: _pipAvailable ? _enterPip : null,
+                  onEnterPip: _pipAvailable
+                      ? () => _enterPip(fromButton: true)
+                      : null,
                   onToggleFullscreen: _fullscreenAvailable
                       ? _toggleFullscreen
                       : null,
