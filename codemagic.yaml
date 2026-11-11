@@ -4,19 +4,27 @@ workflows:
     name: ZoroX iOS (unsigned)
     max_build_duration: 120
     instance_type: mac_mini_m2
+
     environment:
       flutter: 3.47.7
       xcode: latest
       cocoapods: default
+
     triggering:
       events:
         - push
       branch_patterns:
         - pattern: master
           include: true
+
     scripts:
       - name: Get Flutter packages
         script: flutter pub get
+
+      - name: Generate Dart files
+        script: |
+          dart run build_runner build --delete-conflicting-outputs
+
       - name: Build iOS unsigned
         script: |
           flutter build ios --release --config-only
@@ -29,6 +37,7 @@ workflows:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             DEVELOPMENT_TEAM=""
+
       - name: Package unsigned IPA
         script: |
           mkdir -p Payload
@@ -36,6 +45,7 @@ workflows:
           VERSION=$(grep '^version:' pubspec.yaml | cut -d ' ' -f 2 | cut -d '+' -f 1)
           zip -r -y "ZoroX-${VERSION}-unsigned.ipa" Payload
           ls -lh *.ipa
+
     artifacts:
       - ZoroX-*.ipa
 
@@ -43,17 +53,28 @@ workflows:
     name: ZoroX Android APK
     max_build_duration: 120
     instance_type: mac_mini_m2
+
     environment:
       flutter: 3.47.7
+
     scripts:
       - name: Configure Flutter and Android SDK
         script: |
           echo "flutter.sdk=$HOME/programs/flutter" > "$CM_BUILD_DIR/android/local.properties"
           echo "sdk.dir=$ANDROID_SDK_ROOT" >> "$CM_BUILD_DIR/android/local.properties"
           flutter doctor -v
+
       - name: Install dependencies
-        script: flutter pub get
+        script: |
+          flutter pub get
+
+      - name: Generate Dart files
+        script: |
+          dart run build_runner build --delete-conflicting-outputs
+
       - name: Build Android APK
-        script: flutter build apk --debug
+        script: |
+          flutter build apk --debug
+
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
