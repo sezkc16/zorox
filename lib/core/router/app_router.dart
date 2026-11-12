@@ -10,7 +10,7 @@ import 'package:skystream/features/addons/presentation/addons_screen.dart';
 import 'package:skystream/features/addons/presentation/addon_detail_screen.dart';
 import 'package:skystream/features/addons/presentation/addon_catalog_screen.dart';
 import 'package:skystream/features/settings/presentation/settings_screen.dart';
-// v18 (2.9.17) test build: the player route points at the mpv engine
+// v19 (2.9.18) mpv build: the player route points at the mpv engine
 // (MpvPlayerScreen) so the user can compare it with v17 (libVLC). The VLC
 // screen stays in the repo untouched; to go back, point PlayerRoute at
 // VlcPlayerScreen again (import
