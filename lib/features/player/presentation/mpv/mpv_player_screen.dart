@@ -1,15 +1,30 @@
-/// Playback on the mpv engine (via media_kit) — v18 test build.
+/// Playback on the mpv engine (via media_kit) — ZoroX v18-fixes (2.9.17+3).
 ///
-/// A focused, parallel player screen that plays the same resolved streams as
-/// the VLC screen (VlcPlayerScreen) on the mpv engine, so the two engines
-/// can be compared on the same phone for the same films:
+/// The v18-mpv player, restyled to the approved Claude-spec controls and
+/// with the behaviour fixes the v19 line never landed:
 ///
-///   * double-tap ±10 s seek (forward AND back) — mpv pre-buffers ahead AND
-///     keeps a backward cache, so a ±10 s seek should land in already-buffered
-///     data instead of re-fetching / reconnecting;
-///   * pause/resume — a plain mpv pause keeps the stream and the exact
-///     position, with no "Reconnecting..." and no 0:00 reset;
-///   * subtitles, volume/brightness gestures, speed, source switching.
+///   * the Claude-spec overlay — gold #D4AF37, top bar (back, title,
+///     episode · quality · source, cast), centre ±10 s around a 52 px gold
+///     play button, bottom seekbar (elapsed, gold track, remaining with a
+///     minus sign) and a button row (Lock, speed chip, Episodes pill on the
+///     left; CC, audio, next episode on the right);
+///   * the CC sheet — Subtitles (Off, languages, add a local file) and
+///     Style (live preview, size, colour, background, edge, position
+///     slider + the +5/+10/−5/−10 nudge buttons) tabs, persisted;
+///   * the Episodes sheet — season dropdown, rows with thumbnail, progress,
+///     gold "Now playing" border, dimmed watched;
+///   * Continue Watching resume — a [PlaybackProgressRecorder] is fed the
+///     same samples as the tracker and flushed on pause and teardown, so
+///     leaving and coming back resumes where the viewer was;
+///   * the source list before play — the startup view shows the resolving
+///     sources (portrait, quality labels) and auto-plays the first working
+///     one; tapping a row plays that source instead;
+///   * landscape only once the video itself starts playing, so the source
+///     list stays portrait;
+///   * Back stops the player and returns to portrait;
+///   * no centre "+10s"/"−10s" pop-up on a double-tap seek;
+///   * a right-side long-press holds 2x until released;
+///   * the seekbar drags a local preview and commits the seek on release.
 ///
 /// mpv cache (the point of this build), set in one place:
 ///   * `PlayerConfiguration(bufferSize: 512 MiB)` — media_kit maps this to
@@ -54,11 +69,16 @@
 ///         whose PiP pipeline is proven (v16 worked) — fix the v17 black
 ///         PiP there (v19), not on mpv.
 ///   * Side-car subtitle download (OpenSubtitles etc.) — only the subtitles
-///     the plugin already listed on the stream, plus embedded tracks.
+///     the plugin already listed on the stream, plus embedded tracks, plus
+///     a local file the viewer adds.
 ///   * ClearKey DRM (drmKid/drmKey) — media_kit exposes no ClearKey path; a
 ///     DRM stream will fail to play and the failover moves to the next source.
-///   * Skip Intro/Outro, HLS quality picker (mpv's ABR picks the rendition),
-///     auto-advance to the next episode. Ended shows Replay + Close.
+///   * Subtitle delay — media_kit 1.2.6 exposes no subtitle-delay API (no
+///     `setSubtitleDelay`, no property setter), so the CC sheet's delay
+///     stepper is shown disabled with the reason, rather than a stepper
+///     that moves a number without moving the captions.
+///   * Skip Intro/Outro, HLS quality picker (mpv's ABR picks the rendition).
+///     Ended shows Replay + Close.
 ///   * Volume is the engine's gain (`setVolume`), not the system volume the
 ///     VLC screen drives; brightness reuses the same platform channel as the
 ///     VLC screen ([PlatformPlayerBrightness]).
@@ -68,7 +88,7 @@
 ///     only.
 ///
 /// The VLC screen stays in the repo untouched; the route points here for this
-/// test build, and flipping it back is a one-line change in `app_router.dart`.
+/// build, and flipping it back is a one-line change in `app_router.dart`.
 library;
 
 import 'dart:async';
@@ -83,10 +103,17 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../l10n/generated/app_localizations.dart';
+import '../../../settings/presentation/player_settings_provider.dart';
+import '../../domain/episode_navigator.dart';
 import '../../domain/playback_progress.dart';
 import '../../domain/playback_tracker.dart';
+import '../../domain/source_row_status.dart';
 import '../../domain/stream_resolver.dart';
 import '../player_brightness.dart';
+import '../vlc/player_startup_view.dart';
+import 'mpv_cc_sheet.dart';
+import 'mpv_episodes_sheet.dart';
+import 'mpv_subtitle_style.dart';
 
 /// mpv demuxer cache, forward AND backward, in bytes.
 ///
@@ -110,18 +137,13 @@ const double _kMaxZoom = 3.0;
 
 const Duration _kControlsAutoHide = Duration(seconds: 3);
 
-/// Subtitle size for the mpv overlay (media_kit's default is 32, which is
-/// sized for a desktop window).
-const double _kSubtitleFontSize = 22;
-
-/// Subtitle bottom padding: low at the picture bottom, as in v14 — and
-/// lifted above the controls bar while the bars are up.
-const double _kSubtitlePaddingHidden = 40;
-const double _kSubtitlePaddingControls = 116;
+/// The gold accent, and the dark text/icon colour on gold.
+const Color _kGold = Color(0xffd4af37);
+const Color _kOnGold = Color(0xff1b1b1b);
 
 enum _Stage { resolving, playing, failed }
 
-/// The mpv test player. Same constructor as VlcPlayerScreen so the route
+/// The mpv player. Same constructor as VlcPlayerScreen so the route
 /// can point at either.
 class MpvPlayerScreen extends ConsumerStatefulWidget {
   const MpvPlayerScreen({
@@ -162,6 +184,20 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   StreamResult? get _selected =>
       _streams.isEmpty ? null : _streams[_streamIndex];
 
+  /// Sources that were opened and would not play, so the startup list can
+  /// say so instead of leaving them looking untried.
+  final Set<int> _failedStreams = <int>{};
+
+  /// The episode (and its resolution token) this screen is playing. A
+  /// switch from the Episodes sheet or Next Episode changes these in place
+  /// and re-resolves, rather than pushing a new player route.
+  late Episode? _currentEpisode;
+  late String _currentVideoUrl;
+
+  /// Whether the first resolve may use the route's preloaded streams. An
+  /// episode switch resolves fresh (or from the new episode's own streams).
+  bool _firstResolve = true;
+
   /// Where to resume, resolved once before the first open.
   Duration _resumePosition = Duration.zero;
 
@@ -169,6 +205,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// VLC screen uses, fed from mpv's state stream.
   PlaybackTracker? _tracker;
   int _sessionToken = 0;
+
+  /// Continue Watching — the VLC screen's recorder, fed the same samples as
+  /// the tracker and flushed on pause and teardown. Without it the screen
+  /// never wrote a position, so coming back always started at 0:00.
+  PlaybackProgressRecorder? _recorder;
+  ProgressSample? _sample;
+  bool _recordedLivestream = false;
 
   /// Last good state, for the UI and the tracker.
   Duration _position = Duration.zero;
@@ -183,12 +226,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   int _subtitleAppliedFor = -1;
 
   /// True once playback has actually started for the open source (used by the
-  /// startup watchdog).
+  /// startup watchdog, and by the first-play landscape switch).
   bool _startedPlaying = false;
   Timer? _watchdogTimer;
 
   bool _controlsVisible = true;
   Timer? _hideTimer;
+
+  /// Lock: all controls hidden, only an Unlock chip shown. Gestures are
+  /// ignored while locked (pinch zoom is not a control and still works).
+  bool _locked = false;
 
   /// Pinch zoom factor, applied with a Transform around the Video widget.
   double _zoom = 1.0;
@@ -203,7 +250,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// Speed (1.0 = normal).
   double _speed = 1.0;
 
-  /// Centre flash after a double-tap seek / play-pause ("+10s", "❚❚").
+  /// The speed a right-side long-press is holding 2x over, restored on
+  /// release. Null when no long-press is holding.
+  double? _speedBeforeLongPress;
+
+  /// When the last double-tap landed, so a second tap held down does not
+  /// also engage the long-press 2x.
+  DateTime? _lastDoubleTapAt;
+
+  /// Centre flash after a centre double-tap play-pause ("❚❚" / "▶"). The
+  /// ±10 s flash is deliberately gone: a double-tap seek shows nothing.
   String? _flash;
   Timer? _flashTimer;
 
@@ -216,13 +272,19 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   PlayerBrightness get _brightnessApi => PlatformPlayerBrightness();
 
+  bool get _isSeries =>
+      widget.item.contentType == MultimediaContentType.series ||
+      widget.item.contentType == MultimediaContentType.anime;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Landscape on a portrait handset, as the VLC screen does; restored on
-    // the way out.
-    _forceLandscapeIfPortrait();
+    _currentEpisode = widget.episode;
+    _currentVideoUrl = widget.videoUrl;
+    // No landscape here: the source list shown before play stays portrait,
+    // and landscape is forced only when the video itself first starts
+    // playing (see the playing listener).
     _init();
   }
 
@@ -236,14 +298,30 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
+    // Order matters: write first, tear down second. A stop after the write
+    // halts the audio now — the async dispose alone left it running after
+    // the screen was gone.
+    _flushProgress();
     try {
       _tracker?.finish();
     } catch (_) {
       // Tracking must never block leaving the player.
     }
+    unawaited(_player.stop());
     unawaited(_player.dispose());
     _restoreOrientation();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_disposed || !mounted) return;
+    // A backstop behind the pause flush: the position at the moment the
+    // app goes away is the one Continue Watching must have.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _flushProgress();
+    }
   }
 
   void _forceLandscapeIfPortrait() {
@@ -259,9 +337,31 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 
   void _restoreOrientation() {
+    // Force portrait on the way out: the player is the only landscape
+    // screen, and DeviceOrientation.values (all) does NOT rotate the
+    // device — it just lifts the pin, so the app stays sideways in
+    // landscape after Back. portraitUp rotates it back upright.
     unawaited(
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values),
+      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
     );
+  }
+
+  /// Leaves the player: stop the audio first, then portrait (so the rotation
+  /// starts with the exit transition), then the pop. dispose() repeats the
+  /// stop and the portrait as a safety net for a route that went any other
+  /// way.
+  void _goBack() {
+    unawaited(_player.stop());
+    _restoreOrientation();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  /// Writes the last known-good sample, bypassing the rate limit.
+  void _flushProgress() {
+    final sample = _sample;
+    final recorder = _recorder;
+    if (sample == null || recorder == null) return;
+    recorder.record(sample, lastStreamUrl: _selected?.url, force: true);
   }
 
   Future<void> _init() async {
@@ -314,10 +414,25 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         if (_disposed) return;
         _playing = playing;
         if (playing) {
+          final firstPlay = !_startedPlaying;
           _startedPlaying = true;
           _watchdogTimer?.cancel();
+          if (firstPlay) {
+            // First frame of playback: the video itself has started, so
+            // now — and only now — rotate to landscape on a portrait
+            // handset. The source list shown before this stays portrait.
+            _forceLandscapeIfPortrait();
+            // And the source list's job is done: the video is up.
+            if (_stage == _Stage.resolving) {
+              _stage = _Stage.playing;
+            }
+          }
         } else {
           _tracker?.onPaused();
+          // Pausing is the viewer's own save point, so flush past the
+          // rate limit. A stall that auto-pauses the engine flushes the
+          // same way — the position is real either way.
+          _flushProgress();
         }
         _showControlsBriefly();
         setState(() {});
@@ -327,16 +442,27 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.position.listen((position) {
         if (_disposed) return;
         _position = position;
-        // Feed the tracker, as the VLC screen does: only samples taken while
-        // playing count toward history / watched.
+        // Feed the tracker and the Continue Watching recorder from the
+        // same sample: only samples taken while playing count toward
+        // history / watched, and the token ties them to this session.
         if (_playing && _duration > Duration.zero) {
-          _tracker?.onPlaying(
-            ProgressSample(
-              position: position,
-              duration: _duration,
-              token: _sessionToken,
-            ),
+          final sample = ProgressSample(
+            position: position,
+            duration: _duration,
+            token: _sessionToken,
           );
+          _tracker?.onPlaying(sample);
+          if (sample.isWritable) {
+            _sample = sample;
+            _recorder?.record(sample, lastStreamUrl: _selected?.url);
+          }
+        }
+        // A livestream has no position to store, but Continue Watching
+        // still needs the row.
+        if (!_recordedLivestream &&
+            widget.item.contentType == MultimediaContentType.livestream) {
+          _recordedLivestream = true;
+          _recorder?.recordLivestream();
         }
         // Throttle UI rebuilds: the bar only needs ~5 updates a second.
         final now = DateTime.now();
@@ -373,6 +499,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         if (_disposed) return;
         _completed = completed;
         if (completed) {
+          _flushProgress();
           try {
             _tracker?.finish();
           } catch (_) {}
@@ -406,14 +533,17 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       final resolved = await resolvePlayback(
         read: ref.read,
         item: widget.item,
-        videoUrl: widget.videoUrl,
-        preloadedStreams: widget.preloadedStreams,
+        videoUrl: _currentVideoUrl,
+        preloadedStreams: _firstResolve
+            ? widget.preloadedStreams
+            : _currentEpisode?.streams,
       );
+      _firstResolve = false;
       final resume = await resolveResumePoint(
         read: ref.read,
         item: widget.item,
-        episode: widget.episode,
-        videoUrl: widget.videoUrl,
+        episode: _currentEpisode,
+        videoUrl: _currentVideoUrl,
       );
       if (_disposed) return;
       _streams = resolved.streams;
@@ -422,12 +552,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       // Only a real livestream is LIVE; an HLS VOD reports its duration once
       // mpv reads the playlist, and _canSeek stays off until then.
       _isLive = widget.item.contentType == MultimediaContentType.livestream;
-      setState(() => _stage = _Stage.playing);
+      // The stage stays resolving: the startup view now lists the sources,
+      // and it only gives way to the video when the first one actually
+      // plays. The first open is automatic — the list is the control, not
+      // a gate.
+      if (mounted) setState(() {});
       _tracker = PlaybackTracker(
         read: ref.read,
         item: widget.item,
-        episode: widget.episode,
-        videoUrl: widget.videoUrl,
+        episode: _currentEpisode,
+        videoUrl: _currentVideoUrl,
         token: ++_sessionToken,
       );
       await _openStream(_streamIndex, start: _resumePosition);
@@ -454,13 +588,24 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _streamIndex = index;
     _startedPlaying = false;
     _subtitleAppliedFor = -1;
+    _recordedLivestream = false;
+    _sample = null;
     final stream = _streams[index];
     _sessionToken++;
     _tracker = PlaybackTracker(
       read: ref.read,
       item: widget.item,
-      episode: widget.episode,
-      videoUrl: widget.videoUrl,
+      episode: _currentEpisode,
+      videoUrl: _currentVideoUrl,
+      token: _sessionToken,
+    );
+    // One recorder per open, stamped with this session's token, so a sample
+    // from a previous source can never be written under this one.
+    _recorder = PlaybackProgressRecorder(
+      read: ref.read,
+      item: widget.item,
+      episode: _currentEpisode,
+      videoUrl: _currentVideoUrl,
       token: _sessionToken,
     );
     try {
@@ -495,6 +640,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   void _tryNextStream() {
     if (_disposed) return;
+    _failedStreams.add(_streamIndex);
     final next = _streamIndex + 1;
     if (next >= _streams.length) {
       setState(() {
@@ -508,6 +654,46 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         ? _position
         : Duration.zero;
     unawaited(_openStream(next, start: resumeAt));
+  }
+
+  /// A row picked on the startup list, before anything is playing: open
+  /// that source instead of the one the auto-open chose. The list stays up
+  /// until the picked source plays, so a pick that fails falls over to the
+  /// next one the same way.
+  void _pickFromStartup(int index) {
+    if (_disposed || index < 0 || index >= _streams.length) return;
+    if (index == _streamIndex && !_startedPlaying) return;
+    unawaited(_openStream(index, start: _position));
+  }
+
+  /// Switches to another episode in place: the current episode's progress
+  /// is flushed, the engine is stopped, and the new episode resolves and
+  /// opens through the same startup list. A saved position on the new
+  /// episode resumes from there.
+  Future<void> _switchEpisode(Episode next) async {
+    if (_disposed) return;
+    _flushProgress();
+    try {
+      _tracker?.finish();
+    } catch (_) {}
+    await _player.stop();
+    if (_disposed) return;
+    _currentEpisode = next;
+    _currentVideoUrl = next.url;
+    _streams = const [];
+    _streamIndex = 0;
+    _failedStreams.clear();
+    _startedPlaying = false;
+    _subtitleAppliedFor = -1;
+    _position = Duration.zero;
+    _duration = Duration.zero;
+    _buffered = Duration.zero;
+    _completed = false;
+    _resumePosition = Duration.zero;
+    _sample = null;
+    _recorder = null;
+    setState(() => _stage = _Stage.resolving);
+    await _resolveAndOpen();
   }
 
   /// Picks a subtitle without being asked: the plugin's own subtitle file
@@ -553,7 +739,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       Duration.zero,
       _duration,
     );
-    _flashSeek(delta);
+    // No centre flash: a double-tap seek seeks, and shows nothing.
     await _player.seek(target);
   }
 
@@ -577,65 +763,26 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     if (mounted) setState(() {});
   }
 
-  // -- subtitles / audio / source sheets -----------------------------------
+  // -- sheets ---------------------------------------------------------------
 
-  Future<void> _pickSubtitle() async {
+  /// The CC sheet: Subtitles (track pick, add a local file) and Style
+  /// (live restyle, persisted). A track pick is applied; a style change
+  /// needs nothing — it already restyled the caption live.
+  Future<void> _openCcSheet() async {
+    if (!mounted) return;
     final embedded = _player.state.tracks.subtitle;
     final external = _selected?.subtitles ?? const [];
-    if (!mounted) return;
-    final choice = await showModalBottomSheet<SubtitleTrack?>(
+    final choice = await showMpvCcSheet(
       context: context,
-      backgroundColor: const Color(0xff181818),
-      builder: (context) {
-        final current = _player.state.track.subtitle;
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              ListTile(
-                title: const Text(
-                  'Off',
-                  style: TextStyle(color: Colors.white),
-                ),
-                trailing: current.id == 'no'
-                    ? const Icon(Icons.check, color: Color(0xffd4af37))
-                    : null,
-                onTap: () => Navigator.pop(context, SubtitleTrack.no()),
-              ),
-              for (final sub in external)
-                ListTile(
-                  title: Text(
-                    '${sub.label} (source)',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  trailing: current.title == sub.label
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(
-                    context,
-                    SubtitleTrack.uri(sub.url, title: sub.label),
-                  ),
-                ),
-              for (final sub in embedded)
-                ListTile(
-                  title: Text(
-                    sub.title ?? 'Subtitle ${sub.id}',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  trailing: current.id == sub.id
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(context, sub),
-                ),
-            ],
-          ),
-        );
-      },
+      embedded: embedded,
+      external: external,
+      current: _player.state.track.subtitle,
     );
     if (choice != null) {
       await _player.setSubtitleTrack(choice);
       if (mounted) setState(() {});
     }
+    _showControls();
   }
 
   Future<void> _pickAudio() async {
@@ -663,7 +810,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                           style: const TextStyle(color: Colors.white54),
                         ),
                   trailing: current.id == track.id
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
+                      ? const Icon(Icons.check, color: _kGold)
                       : null,
                   onTap: () => Navigator.pop(context, track),
                 ),
@@ -676,37 +823,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       await _player.setAudioTrack(choice);
       if (mounted) setState(() {});
     }
-  }
-
-  Future<void> _pickSource() async {
-    if (!mounted || _streams.length < 2) return;
-    final choice = await showModalBottomSheet<int>(
-      context: context,
-      backgroundColor: const Color(0xff181818),
-      builder: (context) {
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              for (var i = 0; i < _streams.length; i++)
-                ListTile(
-                  title: Text(
-                    _streams[i].displaySource,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  trailing: i == _streamIndex
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(context, i),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-    if (choice != null && choice != _streamIndex) {
-      await _openStream(choice, start: _position);
-    }
+    _showControls();
   }
 
   Future<void> _pickSpeed() async {
@@ -727,7 +844,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                     style: const TextStyle(color: Colors.white),
                   ),
                   trailing: speed == _speed
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
+                      ? const Icon(Icons.check, color: _kGold)
                       : null,
                   onTap: () => Navigator.pop(context, speed),
                 ),
@@ -737,6 +854,57 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       },
     );
     if (choice != null) await _setSpeed(choice);
+    _showControls();
+  }
+
+  /// The Episodes sheet: a season dropdown and the season's rows. A pick
+  /// switches episode in place.
+  Future<void> _openEpisodesSheet() async {
+    if (!mounted) return;
+    final picked = await showMpvEpisodesSheet(
+      context: context,
+      item: widget.item,
+      current: _currentEpisode,
+      videoUrl: _currentVideoUrl,
+    );
+    if (picked != null && picked.url != _currentEpisode?.url) {
+      await _switchEpisode(picked);
+    }
+    _showControls();
+  }
+
+  /// Next Episode: the episode after this one in the dub-filtered list, or
+  /// nothing when this is the last. Hidden for films.
+  void _onNextEpisode() {
+    final next = nextEpisodeFor(
+      item: widget.item,
+      current: _currentEpisode,
+      videoUrl: _currentVideoUrl,
+    ).next;
+    if (next == null) return;
+    unawaited(_switchEpisode(next));
+  }
+
+  /// Cast is not a feature ZoroX has (Cast to TV was skipped), so the icon
+  /// says so rather than pretending.
+  void _onCast() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("Casting isn't available in ZoroX yet"),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _lock() {
+    _locked = true;
+    _hideTimer?.cancel();
+    if (mounted) setState(() {});
+  }
+
+  void _unlock() {
+    _locked = false;
+    _showControls();
   }
 
   // -- gestures -------------------------------------------------------------
@@ -758,23 +926,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 
   void _toggleControls() {
+    if (_locked) return;
     if (_controlsVisible) {
       _hideTimer?.cancel();
       setState(() => _controlsVisible = false);
     } else {
       _showControls();
     }
-  }
-
-  void _flashSeek(Duration delta) {
-    final seconds = delta.inSeconds;
-    _flash = seconds > 0 ? '+${seconds}s' : '${seconds}s';
-    _flashTimer?.cancel();
-    _flashTimer = Timer(const Duration(milliseconds: 900), () {
-      if (_disposed) return;
-      setState(() => _flash = null);
-    });
-    setState(() {});
   }
 
   void _flashPlayPause() {
@@ -788,6 +946,8 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 
   void _onDoubleTapDown(TapDownDetails details) {
+    if (_locked) return;
+    _lastDoubleTapAt = DateTime.now();
     final width = MediaQuery.sizeOf(context).width;
     final x = details.globalPosition.dx;
     if (x < width / 3) {
@@ -800,7 +960,45 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     }
   }
 
+  /// A right-side long-press holds 2x while held, and restores the speed
+  /// on release. Gated to the right third (the forward-seek zone) and
+  /// ignored when it is really the second tap of a double-tap held down,
+  /// so the two never fight.
+  void _onLongPressStart(LongPressStartDetails details) {
+    if (_disposed || _locked) return;
+    final width = MediaQuery.sizeOf(context).width;
+    if (details.globalPosition.dx <= width * 2 / 3) return;
+    final lastDoubleTap = _lastDoubleTapAt;
+    if (lastDoubleTap != null &&
+        DateTime.now().difference(lastDoubleTap) <
+            const Duration(milliseconds: 800)) {
+      return;
+    }
+    if (_speed == 2.0) return;
+    _speedBeforeLongPress = _speed;
+    _gestureIndicator = '2x';
+    unawaited(_player.setRate(2.0));
+    setState(() {});
+  }
+
+  void _onLongPressEnd(LongPressEndDetails details) {
+    _endLongPressSpeed();
+  }
+
+  void _onLongPressCancel() {
+    _endLongPressSpeed();
+  }
+
+  void _endLongPressSpeed() {
+    final previous = _speedBeforeLongPress;
+    if (previous == null) return;
+    _speedBeforeLongPress = null;
+    if (_gestureIndicator == '2x') _gestureIndicator = null;
+    unawaited(_setSpeed(previous));
+  }
+
   void _onVerticalDragUpdate(DragUpdateDetails details, double width) {
+    if (_locked) return;
     final x = details.globalPosition.dx;
     final delta = -details.delta.dy / 200;
     if (x < width / 2) {
@@ -838,15 +1036,85 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   bool get _canSeek => _duration > Duration.zero && !_isLive;
 
+  /// "Show name · S1 E3" for a series, the bare title for a film.
+  String get _playerTitle {
+    final episode = _currentEpisode;
+    if (_isSeries && episode != null) {
+      return '${widget.item.title} · S${episode.season} E${episode.episode}';
+    }
+    return widget.item.title;
+  }
+
+  /// Episode name · quality · source, single line, ellipsis. The file size
+  /// the spec's line wants is not known on this engine (no probe runs), so
+  /// the source takes its place.
+  String get _playerSubtitleLine {
+    final quality = _selected?.quality;
+    final qualityLabel = quality != null && quality > 0
+        ? '${quality}p'
+        : 'Auto';
+    final source = _selected?.displaySource;
+    final episode = _currentEpisode;
+    if (_isSeries && episode != null) {
+      return source == null
+          ? '${episode.name} · $qualityLabel'
+          : '${episode.name} · $qualityLabel · $source';
+    }
+    return source == null ? qualityLabel : '$qualityLabel · $source';
+  }
+
+  /// "S1 E3 · Episode name", for the startup list.
+  String? get _episodeLine {
+    final episode = _currentEpisode;
+    if (!_isSeries || episode == null) return null;
+    return 'S${episode.season} E${episode.episode} · ${episode.name}';
+  }
+
+  List<StartupRow> get _startupRows {
+    return <StartupRow>[
+      for (var i = 0; i < _streams.length; i++)
+        StartupRow(
+          label: _startupRowLabel(_streams[i]),
+          reachability: SourceReachability.notChecked,
+          playState: _failedStreams.contains(i)
+              ? SourcePlayState.failed
+              : i == _streamIndex
+                  ? (_startedPlaying
+                        ? SourcePlayState.playing
+                        : SourcePlayState.opening)
+                  : SourcePlayState.untried,
+        ),
+    ];
+  }
+
+  /// The plugin's own label for the source, led by its provider, with the
+  /// quality after it — "HubCloud · 1080p".
+  String _startupRowLabel(StreamResult stream) {
+    final base = sourceRowLabel(stream);
+    final quality = stream.quality;
+    return quality != null && quality > 0 ? '$base · ${quality}p' : base;
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    const gold = Color(0xffd4af37);
+    // The saved subtitle style, watched so a Style-tab change restyles the
+    // caption live. An unloaded provider reads as a fresh install.
+    final settings =
+        ref.watch(playerSettingsProvider).asData?.value ??
+        const PlayerSettings();
     final position = _position;
     final duration = _duration;
     final bufferedFrac = _canSeek
         ? (_buffered.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
+    final nextEpisode = _isSeries
+        ? nextEpisodeFor(
+            item: widget.item,
+            current: _currentEpisode,
+            videoUrl: _currentVideoUrl,
+          ).next
+        : null;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -858,6 +1126,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
             behavior: HitTestBehavior.opaque,
             onTap: _toggleControls,
             onDoubleTapDown: _onDoubleTapDown,
+            onLongPressStart: _onLongPressStart,
+            onLongPressEnd: _onLongPressEnd,
+            onLongPressCancel: _onLongPressCancel,
             onScaleStart: (_) => _zoomBase = _zoom,
             onScaleUpdate: (details) {
               setState(() {
@@ -880,46 +1151,35 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                   controls: (_) => const SizedBox.shrink(),
                   wakelock: true,
                   pauseUponEnteringBackgroundMode: true,
-                  subtitleViewConfiguration: SubtitleViewConfiguration(
-                    style: const TextStyle(
-                      height: 1.4,
-                      fontSize: _kSubtitleFontSize,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                      backgroundColor: Color(0xaa000000),
-                    ),
-                    textAlign: TextAlign.center,
-                    padding: EdgeInsets.fromLTRB(
-                      16,
-                      0,
-                      16,
-                      _controlsVisible
-                          ? _kSubtitlePaddingControls
-                          : _kSubtitlePaddingHidden,
-                    ),
-                  ),
+                  subtitleViewConfiguration:
+                      mpvSubtitleViewConfiguration(
+                        settings,
+                        screenHeight: MediaQuery.sizeOf(context).height,
+                        controlsVisible: _controlsVisible,
+                      ),
                 ),
               ),
             ),
           ),
 
-          // Resolving / failed states.
+          // Resolving: the source list. It stays up until the first source
+          // actually plays — the list is the control, and the first open is
+          // automatic.
           if (_stage == _Stage.resolving)
-            Container(
-              color: Colors.black,
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(color: Color(0xffd4af37)),
-                    const SizedBox(height: 16),
-                    Text(
-                      l10n.loading,
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                  ],
-                ),
-              ),
+            PlayerStartupView(
+              title: widget.item.title,
+              episodeLine: _episodeLine,
+              logoUrl: widget.item.logoUrl,
+              backdropUrl: widget.item.backdropImageUrl,
+              sourceName: _selected?.displaySource,
+              status: _streams.isEmpty ? 'Getting links…' : null,
+              attempt: _streams.isEmpty
+                  ? null
+                  : (index: _streamIndex + 1, total: _streams.length),
+              rows: _startupRows,
+              currentIndex: _streams.isEmpty ? null : _streamIndex,
+              onPick: _pickFromStartup,
+              onBack: _goBack,
             ),
           if (_stage == _Stage.failed)
             Container(
@@ -957,7 +1217,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                           ),
                           const SizedBox(width: 12),
                           OutlinedButton(
-                            onPressed: () => Navigator.of(context).pop(),
+                            onPressed: _goBack,
                             child: Text(l10n.cancel),
                           ),
                         ],
@@ -971,10 +1231,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
           // Buffering spinner (playing but waiting on data).
           if (_stage == _Stage.playing && _playing && _buffering)
             const Center(
-              child: CircularProgressIndicator(color: Color(0xffd4af37)),
+              child: CircularProgressIndicator(color: _kGold),
             ),
 
-          // Centre flash (±10 s / play-pause).
+          // Centre flash (play-pause only — a seek shows nothing).
           if (_flash != null)
             Center(
               child: Container(
@@ -997,7 +1257,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               ),
             ),
 
-          // Volume / brightness indicator.
+          // Volume / brightness / 2x indicator.
           if (_gestureIndicator != null)
             Align(
               alignment: Alignment.center,
@@ -1047,7 +1307,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                         ),
                         const SizedBox(width: 12),
                         OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(),
+                          onPressed: _goBack,
                           child: Text(l10n.close),
                         ),
                       ],
@@ -1057,14 +1317,59 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               ),
             ),
 
+          // Locked: every control hidden, only the Unlock chip, bottom
+          // centre. Unlock restores the controls.
+          if (_stage == _Stage.playing && _locked && !_completed)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: MediaQuery.paddingOf(context).bottom + 16,
+              child: Center(
+                child: GestureDetector(
+                  onTap: _unlock,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.lock_open,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                        SizedBox(width: 6),
+                        Text(
+                          'Unlock',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
           // Controls overlay.
           if (_stage == _Stage.playing &&
               _controlsVisible &&
-              !_completed)
+              !_completed &&
+              !_locked)
             _ControlsOverlay(
-              gold: gold,
-              title: widget.item.title,
+              title: _playerTitle,
+              subtitleLine: _playerSubtitleLine,
               isLive: _isLive,
+              isSeries: _isSeries,
               playing: _playing,
               buffering: _buffering,
               position: position,
@@ -1072,9 +1377,8 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               bufferedFraction: bufferedFrac,
               canSeek: _canSeek,
               speed: _speed,
-              sourceLabel: _selected?.displaySource,
-              subtitleLabel: _player.state.track.subtitle.title,
-              onBack: () => Navigator.of(context).pop(),
+              hasNextEpisode: nextEpisode != null,
+              onBack: _goBack,
               onPlayPause: _togglePlayPause,
               onSeekBack: () => unawaited(_seekBy(-_kSeekStep)),
               onSeekForward: () => unawaited(_seekBy(_kSeekStep)),
@@ -1085,10 +1389,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                   ),
                 ),
               ),
-              onSubtitle: _pickSubtitle,
-              onAudio: _pickAudio,
-              onSource: _streams.length > 1 ? _pickSource : null,
+              onCast: _onCast,
+              onLock: _lock,
               onSpeed: _pickSpeed,
+              onEpisodes: _openEpisodesSheet,
+              onSubtitle: _openCcSheet,
+              onAudio: _pickAudio,
+              onNextEpisode: _onNextEpisode,
               format: _format,
             ),
         ],
@@ -1097,12 +1404,21 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 }
 
-/// Top bar + bottom bar, Gold & Black like the rest of the app.
-class _ControlsOverlay extends StatelessWidget {
+/// The Claude-spec controls overlay: a black 38% scrim over the video, a
+/// top bar (back, title + episode · quality · source, cast), centre ±10 s
+/// around a 52 px gold play button, and a bottom bar — seekbar (elapsed,
+/// gold track, remaining with a minus sign), then a button row: Lock, speed
+/// chip, Episodes pill on the left; CC, audio, next episode on the right.
+///
+/// The seekbar drags a local preview and commits the seek on release, as
+/// the VLC scrubber does — seeking the engine on every move flooded mpv
+/// with seeks and the bar looked dead.
+class _ControlsOverlay extends StatefulWidget {
   const _ControlsOverlay({
-    required this.gold,
     required this.title,
+    required this.subtitleLine,
     required this.isLive,
+    required this.isSeries,
     required this.playing,
     required this.buffering,
     required this.position,
@@ -1110,23 +1426,26 @@ class _ControlsOverlay extends StatelessWidget {
     required this.bufferedFraction,
     required this.canSeek,
     required this.speed,
-    required this.sourceLabel,
-    required this.subtitleLabel,
+    required this.hasNextEpisode,
     required this.onBack,
     required this.onPlayPause,
     required this.onSeekBack,
     required this.onSeekForward,
     required this.onSeekTo,
+    required this.onCast,
+    required this.onLock,
+    required this.onSpeed,
+    required this.onEpisodes,
     required this.onSubtitle,
     required this.onAudio,
-    required this.onSource,
-    required this.onSpeed,
+    required this.onNextEpisode,
     required this.format,
   });
 
-  final Color gold;
   final String title;
+  final String subtitleLine;
   final bool isLive;
+  final bool isSeries;
   final bool playing;
   final bool buffering;
   final Duration position;
@@ -1134,215 +1453,398 @@ class _ControlsOverlay extends StatelessWidget {
   final double bufferedFraction;
   final bool canSeek;
   final double speed;
-  final String? sourceLabel;
-  final String? subtitleLabel;
+  final bool hasNextEpisode;
   final VoidCallback onBack;
   final VoidCallback onPlayPause;
   final VoidCallback onSeekBack;
   final VoidCallback onSeekForward;
   final ValueChanged<double> onSeekTo;
+  final VoidCallback onCast;
+  final VoidCallback onLock;
+  final VoidCallback onSpeed;
+  final VoidCallback onEpisodes;
   final VoidCallback onSubtitle;
   final VoidCallback onAudio;
-  final VoidCallback? onSource;
-  final VoidCallback onSpeed;
+  final VoidCallback onNextEpisode;
   final String Function(Duration) format;
 
   @override
+  State<_ControlsOverlay> createState() => _ControlsOverlayState();
+}
+
+class _ControlsOverlayState extends State<_ControlsOverlay> {
+  /// The drag preview: a fraction the finger is holding, or null when no
+  /// drag is in progress. Only the display follows it; the engine is
+  /// sought once, on release.
+  double? _dragFraction;
+
+  @override
   Widget build(BuildContext context) {
-    final positionFrac = canSeek && duration > Duration.zero
-        ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
+    final positionFrac =
+        widget.canSeek && widget.duration > Duration.zero
+        ? (widget.position.inMilliseconds /
+                  widget.duration.inMilliseconds)
+              .clamp(0.0, 1.0)
         : 0.0;
-    return Column(
+    final displayFrac = _dragFraction ?? positionFrac;
+    final displayPosition = Duration(
+      milliseconds:
+          (displayFrac * widget.duration.inMilliseconds).round(),
+    );
+    final remaining = widget.duration - displayPosition;
+
+    return Stack(
+      fit: StackFit.expand,
       children: [
+        // Scrim: black at 38% over the whole video.
+        const ColoredBox(color: Color.fromRGBO(0, 0, 0, 0.38)),
+
         // Top bar.
-        Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Colors.black87, Colors.transparent],
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: Padding(
+            padding: EdgeInsets.only(
+              top: MediaQuery.paddingOf(context).top + 12,
+              left: 12,
+              right: 12,
             ),
-          ),
-          padding: EdgeInsets.only(
-            top: MediaQuery.paddingOf(context).top + 8,
-            left: 8,
-            right: 8,
-            bottom: 24,
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: onBack,
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 16,
-                      ),
-                    ),
-                    if (sourceLabel != null)
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                IconButton(
+                  onPressed: widget.onBack,
+                  icon: const Icon(
+                    Icons.arrow_back,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
                       Text(
-                        sourceLabel!,
+                        widget.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: Colors.white54,
-                          fontSize: 12,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
+                          fontSize: 14,
                         ),
                       ),
-                  ],
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.subtitleLine,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.7),
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              if (isLive)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text(
-                    'LIVE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
+                if (widget.isLive)
+                  Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'LIVE',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
-                ),
-              IconButton(
-                onPressed: onSubtitle,
-                icon: Icon(
-                  Icons.closed_caption,
-                  color: subtitleLabel == null ? Colors.white54 : gold,
-                ),
-                tooltip: 'Subtitles',
-              ),
-              IconButton(
-                onPressed: onAudio,
-                icon: const Icon(Icons.audiotrack, color: Colors.white),
-                tooltip: 'Audio',
-              ),
-              if (onSource != null)
                 IconButton(
-                  onPressed: onSource,
-                  icon: const Icon(Icons.swap_horiz, color: Colors.white),
-                  tooltip: 'Source',
+                  onPressed: widget.onCast,
+                  icon: const Icon(
+                    Icons.cast,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 28,
+                    minHeight: 28,
+                  ),
+                  tooltip: 'Cast',
                 ),
-              TextButton(
-                onPressed: onSpeed,
-                child: Text(
-                  '${speed}x',
-                  style: const TextStyle(color: Colors.white),
+              ],
+            ),
+          ),
+        ),
+
+        // Centre controls, a bit above the middle.
+        Align(
+          alignment: const Alignment(0, -0.18),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                onPressed: widget.canSeek ? widget.onSeekBack : null,
+                icon: const Icon(
+                  Icons.replay_10,
+                  color: Colors.white,
+                  size: 30,
+                ),
+              ),
+              const SizedBox(width: 34),
+              GestureDetector(
+                onTap: widget.onPlayPause,
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(
+                    color: _kGold,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    widget.buffering
+                        ? Icons.hourglass_top
+                        : widget.playing
+                            ? Icons.pause
+                            : Icons.play_arrow,
+                    color: _kOnGold,
+                    size: 26,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 34),
+              IconButton(
+                onPressed: widget.canSeek ? widget.onSeekForward : null,
+                icon: const Icon(
+                  Icons.forward_10,
+                  color: Colors.white,
+                  size: 30,
                 ),
               ),
             ],
           ),
         ),
-        const Spacer(),
+
         // Bottom bar.
-        Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.bottomCenter,
-              end: Alignment.topCenter,
-              colors: [Colors.black87, Colors.transparent],
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 12,
+              right: 12,
+              bottom: MediaQuery.paddingOf(context).bottom + 8,
             ),
-          ),
-          padding: EdgeInsets.only(
-            left: 12,
-            right: 12,
-            bottom: MediaQuery.paddingOf(context).bottom + 8,
-            top: 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    format(position),
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 4,
-                        thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 7,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Row 1: seekbar.
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 38,
+                      child: Text(
+                        widget.format(displayPosition),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
                         ),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 14,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: SliderTheme(
+                        data: SliderTheme.of(context).copyWith(
+                          trackHeight: 4,
+                          thumbShape: const RoundSliderThumbShape(
+                            enabledThumbRadius: 6,
+                          ),
+                          overlayShape: const RoundSliderOverlayShape(
+                            overlayRadius: 12,
+                          ),
+                          activeTrackColor: _kGold,
+                          inactiveTrackColor: Colors.white.withValues(
+                            alpha: 0.3,
+                          ),
+                          secondaryActiveTrackColor: Colors.white38,
+                          thumbColor: _kGold,
                         ),
-                        activeTrackColor: gold,
-                        inactiveTrackColor: Colors.white24,
-                        secondaryActiveTrackColor: Colors.white38,
-                        thumbColor: gold,
-                      ),
-                      child: Slider(
-                        value: positionFrac,
-                        secondaryTrackValue: bufferedFraction,
-                        onChanged: canSeek ? onSeekTo : null,
+                        child: Slider(
+                          value: displayFrac,
+                          secondaryTrackValue: widget.bufferedFraction,
+                          onChanged: widget.canSeek
+                              ? (value) =>
+                                    setState(() => _dragFraction = value)
+                              : null,
+                          onChangeEnd: widget.canSeek
+                              ? (value) {
+                                  setState(() => _dragFraction = null);
+                                  widget.onSeekTo(value);
+                                }
+                              : null,
+                        ),
                       ),
                     ),
-                  ),
-                  Text(
-                    isLive ? 'LIVE' : format(duration),
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                ],
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    onPressed: canSeek ? onSeekBack : null,
-                    icon: const Icon(Icons.replay_10, color: Colors.white),
-                    iconSize: 30,
-                  ),
-                  const SizedBox(width: 16),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: gold,
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      onPressed: onPlayPause,
-                      icon: Icon(
-                        buffering
-                            ? Icons.hourglass_top
-                            : playing
-                                ? Icons.pause
-                                : Icons.play_arrow,
-                        color: Colors.black,
+                    const SizedBox(width: 8),
+                    Text(
+                      widget.isLive
+                          ? 'LIVE'
+                          : '-${widget.format(remaining)}',
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
                       ),
-                      iconSize: 34,
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  IconButton(
-                    onPressed: canSeek ? onSeekForward : null,
-                    icon: const Icon(Icons.forward_10, color: Colors.white),
-                    iconSize: 30,
-                  ),
-                ],
-              ),
-            ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                // Row 2: buttons, space between.
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // Left group: Lock, speed chip, Episodes pill.
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _circleButton(
+                          icon: Icons.lock,
+                          onPressed: widget.onLock,
+                          tooltip: 'Lock',
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: widget.onSpeed,
+                          child: Container(
+                            height: 28,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                            ),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Text(
+                              '${widget.speed}x',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (widget.isSeries) ...[
+                          const SizedBox(width: 6),
+                          GestureDetector(
+                            onTap: widget.onEpisodes,
+                            child: Container(
+                              height: 28,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _kGold,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.list,
+                                    color: _kOnGold,
+                                    size: 16,
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Episodes',
+                                    style: TextStyle(
+                                      color: _kOnGold,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    // Right group: CC, audio, next episode.
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _circleButton(
+                          icon: Icons.closed_caption,
+                          onPressed: widget.onSubtitle,
+                          tooltip: 'Subtitles',
+                        ),
+                        const SizedBox(width: 6),
+                        _circleButton(
+                          icon: Icons.audiotrack,
+                          onPressed: widget.onAudio,
+                          tooltip: 'Audio',
+                        ),
+                        if (widget.hasNextEpisode) ...[
+                          const SizedBox(width: 6),
+                          _circleButton(
+                            icon: Icons.skip_next,
+                            onPressed: widget.onNextEpisode,
+                            tooltip: 'Next episode',
+                          ),
+                        ],
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ],
+    );
+  }
+
+  /// A 28 px circle on a white 16% background, with a 16 px icon.
+  Widget _circleButton({
+    required IconData icon,
+    required VoidCallback onPressed,
+    required String tooltip,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
+        onTap: onPressed,
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.16),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(icon, color: Colors.white, size: 16),
+        ),
+      ),
     );
   }
 }
