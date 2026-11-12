@@ -1,78 +1,37 @@
-/// Playback on the mpv engine (via media_kit) — v18 test build.
+/// The ORIGINAL SkyStream player UI, on the mpv engine (via media_kit).
 ///
-/// A focused, parallel player screen that plays the same resolved streams as
-/// the VLC screen (VlcPlayerScreen) on the mpv engine, so the two engines
-/// can be compared on the same phone for the same films:
+/// The stock chrome — [VlcPlayerControls] (top bar, bottom bar, scrubber,
+/// gestures, lock, skip chip) and the stock options panel ([PlayerPanel]:
+/// Audio, Subtitles, Episodes, Sources) — driven by mpv instead of libVLC,
+/// through [MpvVlcController], an mpv-backed [VlcPlayerController] adapter.
+/// The engine is the v18-mpv one: 512 MiB forward + backward demuxer cache,
+/// VideoToolbox hardware decode, ±10 s seek, pause keeps the position.
 ///
-///   * double-tap ±10 s seek (forward AND back) — mpv pre-buffers ahead AND
-///     keeps a backward cache, so a ±10 s seek should land in already-buffered
-///     data instead of re-fetching / reconnecting;
-///   * pause/resume — a plain mpv pause keeps the stream and the exact
-///     position, with no "Reconnecting..." and no 0:00 reset;
-///   * subtitles, volume/brightness gestures, speed, source switching.
+/// What this build carries over the v18-mpv custom overlay:
+///   * the stock top/bottom bars and scrubber, with the stock gestures
+///     (double-tap ±10 s, vertical volume/brightness rails, pinch zoom,
+///     long-press 2x speed boost — all inside the stock controls);
+///   * the stock Options panel with its tabs, the stock Subtitle style page
+///     (including the +5/−5 position nudge), and the episode picker with
+///     posters;
+///   * skip-intro/outro chips, the up-next countdown, and the ended card;
+///   * Continue Watching resume (a [PlaybackProgressRecorder] fed from the
+///     same samples as the tracker), the source list in portrait before
+///     play, Back stopping the audio and returning to portrait, no centre
+///     "+10s"/"−10s" pop-up (the stock seek burst is disabled), and the
+///     pre-play source list with auto-play of the first working source.
 ///
-/// mpv cache (the point of this build), set in one place:
-///   * `PlayerConfiguration(bufferSize: 512 MiB)` — media_kit maps this to
-///     mpv's `demuxer-max-bytes` AND `demuxer-max-back-bytes`, so the demuxer
-///     keeps 512 MiB ahead of playback AND 512 MiB behind it. The window is
-///     deliberately the same 512 MiB as v17's libVLC prefetch ring, so the
-///     comparison is fair. At 1080p (~8 Mbit/s) that is ~8 min ahead and ~8 min
-///     behind; at 4K (~20 Mbit/s) ~3.5 min each way. A ±10 s seek is far inside
-///     both windows, so it should be instant.
-///   * `VideoControllerConfiguration(hwdec: 'videotoolbox')` — hardware
-///     decoding on iOS (VideoToolbox) so 4K HEVC/HDR plays smoothly instead
-///     of on the CPU. `enableHardwareAcceleration: true` (the default) renders
-///     through Metal.
-///
-/// What this build deliberately does NOT carry over (secondary — reported
-/// honestly, not silently broken):
-///   * PiP — NOT available on this build, and there is no PiP button. This
-///     was investigated properly (2026-11-12) and is a real platform wall,
-///     not a wiring oversight:
-///       - iOS grants a PiP window only to an AVPlayerLayer (what
-///         video_player / AVPlayer render through) or to an
-///         AVSampleBufferDisplayLayer fed with CMSampleBuffers. mpv renders
-///         through a Metal/Flutter texture — it has no AVPlayerLayer, so
-///         the AVPlayerLayer route (pip_kit, orvexa_player's iOS backend)
-///         does not apply; orvexa's iOS PiP works by switching the engine
-///         to AVPlayer, which cannot play MKV.
-///       - The AVSampleBufferDisplayLayer route needs a custom native
-///         renderer that pumps decoded mpv frames as sample buffers, and
-///         in the background iOS revokes GPU access, so frames must be
-///         produced by software rendering — which is exactly the wall the
-///         only community attempt hit: media_kit PR #206 (2023, draft,
-///         unmerged) reports "sometimes the PIP displays a black screen,
-///         especially when I switch to network videos" and HEVC
-///         colorimetry problems in background software rendering, and its
-///         maintainer refused to merge it for that reason.
-///       - Building that renderer is a multi-day native subsystem that
-///         cannot be verified without a device (no macOS/iPhone here).
-///         Shipping it untested would risk the same black PiP the user
-///         is trying to escape. So: no PiP button here. Audio DOES keep
-///         playing in the background (the app declares the `audio`
-///         background mode). PiP with video is the job of the libVLC line,
-///         whose PiP pipeline is proven (v16 worked) — fix the v17 black
-///         PiP there (v19), not on mpv.
-///   * Side-car subtitle download (OpenSubtitles etc.) — only the subtitles
-///     the plugin already listed on the stream, plus embedded tracks.
-///   * ClearKey DRM (drmKid/drmKey) — media_kit exposes no ClearKey path; a
-///     DRM stream will fail to play and the failover moves to the next source.
-///   * Skip Intro/Outro, HLS quality picker (mpv's ABR picks the rendition),
-///     auto-advance to the next episode. Ended shows Replay + Close.
-///   * Volume is the engine's gain (`setVolume`), not the system volume the
-///     VLC screen drives; brightness reuses the same platform channel as the
-///     VLC screen ([PlatformPlayerBrightness]).
-///   * There is no stall watchdog / auto-reconnect here on purpose: the v17
-///     pause bug was exactly a watchdog reading a pause as a stall. A pause
-///     is a pause; a genuinely dead source is handled by the startup failover
-///     only.
-///
-/// The VLC screen stays in the repo untouched; the route points here for this
-/// test build, and flipping it back is a one-line change in `app_router.dart`.
+/// What it deliberately does NOT carry (mpv limits, reported honestly):
+///   * PiP — no PiP button; mpv renders through a Metal texture, not an
+///     AVPlayerLayer (see the v18 header). Audio keeps playing in the
+///     background (the app declares the `audio` background mode).
+///   * Subtitle/audio delay — media_kit 1.2.6 exposes no delay API, so the
+///     panel's delay steppers are no-ops (they show 0).
+///   * HLS quality picker — mpv's ABR picks the rendition; no Quality tab.
+///   * Side-car subtitle download, ClearKey DRM, torrent files.
 library;
 
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -80,13 +39,33 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:vlc_player/vlc_player.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../../../core/providers/device_info_provider.dart';
+import '../../../../core/storage/episode_watch_repository.dart';
+import '../../../../core/storage/history_repository.dart';
 import '../../../../l10n/generated/app_localizations.dart';
+import '../../../settings/presentation/player_settings_provider.dart';
+import '../../../skip/data/skip_service.dart';
+import '../../domain/episode_navigator.dart';
 import '../../domain/playback_progress.dart';
 import '../../domain/playback_tracker.dart';
+import '../../domain/skip_segments.dart';
+import '../../domain/source_row_status.dart';
 import '../../domain/stream_resolver.dart';
+import '../../domain/subtitle_search_target.dart';
 import '../player_brightness.dart';
+import '../player_platform_service.dart';
+import '../vlc/chrome_visibility_controller.dart';
+import '../vlc/ended_card.dart';
+import '../vlc/next_episode_countdown.dart';
+import '../vlc/panel/player_panel.dart';
+import '../vlc/panel/player_panel_labels.dart';
+import '../vlc/player_startup_view.dart';
+import '../vlc/vlc_player_controls.dart';
+import 'mpv_subtitle_style.dart';
+import 'mpv_vlc_controller.dart';
 
 /// mpv demuxer cache, forward AND backward, in bytes.
 ///
@@ -101,28 +80,14 @@ const int kMpvBufferSize = 512 * 1024 * 1024;
 /// and the failover moves to the next candidate.
 const Duration _kStartupWatchdog = Duration(seconds: 12);
 
-/// A double-tap seek step.
-const Duration _kSeekStep = Duration(seconds: 10);
-
 /// Pinch-zoom range, same as the VLC screen.
 const double _kMinZoom = 0.5;
 const double _kMaxZoom = 3.0;
 
-const Duration _kControlsAutoHide = Duration(seconds: 3);
-
-/// Subtitle size for the mpv overlay (media_kit's default is 32, which is
-/// sized for a desktop window).
-const double _kSubtitleFontSize = 22;
-
-/// Subtitle bottom padding: low at the picture bottom, as in v14 — and
-/// lifted above the controls bar while the bars are up.
-const double _kSubtitlePaddingHidden = 40;
-const double _kSubtitlePaddingControls = 116;
-
 enum _Stage { resolving, playing, failed }
 
-/// The mpv test player. Same constructor as VlcPlayerScreen so the route
-/// can point at either.
+/// The stock player screen, on the mpv engine. Same constructor as
+/// VlcPlayerScreen so the route can point at either.
 class MpvPlayerScreen extends ConsumerStatefulWidget {
   const MpvPlayerScreen({
     required this.item,
@@ -153,12 +118,17 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   late final Player _player;
   late final VideoController _videoController;
 
+  /// The stock UI's view of the engine. Created with the player; fed from
+  /// every mpv state change via [_publishAdapter].
+  late final MpvVlcController _adapter;
+
   _Stage _stage = _Stage.resolving;
   String? _error;
 
   /// Candidates in failover order, and which one is open.
   List<StreamResult> _streams = const [];
   int _streamIndex = 0;
+  final Set<int> _failedStreams = <int>{};
   StreamResult? get _selected =>
       _streams.isEmpty ? null : _streams[_streamIndex];
 
@@ -170,42 +140,86 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   PlaybackTracker? _tracker;
   int _sessionToken = 0;
 
-  /// Last good state, for the UI and the tracker.
+  /// Continue Watching: the recorder is fed the same samples as the tracker
+  /// and flushed (past its rate limit) on pause, on teardown, and when the
+  /// app goes away — so Back from a point resumes from that point.
+  PlaybackProgressRecorder? _recorder;
+  ProgressSample? _sample;
+  bool _recordedLivestream = false;
+
+  /// Last good state, for the UI and the tracker. Buffering and completion
+  /// are read off the engine by the adapter (which publishes them as the
+  /// stock value), so they are not kept here.
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   Duration _buffered = Duration.zero;
   bool _playing = false;
-  bool _buffering = false;
-  bool _completed = false;
   bool _isLive = false;
 
   /// Which source the subtitle auto-select has already run for.
   int _subtitleAppliedFor = -1;
+
+  /// The audio/subtitle picks the viewer made in the panel, re-applied when
+  /// a failover opens a new source (mpv resets tracks to auto on open).
+  int? _rememberedAudioId;
+  int? _rememberedSubtitleId;
 
   /// True once playback has actually started for the open source (used by the
   /// startup watchdog).
   bool _startedPlaying = false;
   Timer? _watchdogTimer;
 
-  bool _controlsVisible = true;
-  Timer? _hideTimer;
+  /// The chrome's auto-hide clock, owned here and lent to the controls.
+  late final ChromeVisibilityController _chrome;
 
-  /// Pinch zoom factor, applied with a Transform around the Video widget.
-  double _zoom = 1.0;
-  double _zoomBase = 1.0;
+  /// The pinch zoom's value, owned here and written by the controls'
+  /// gesture layer; the Transform over the video reads it.
+  final ValueNotifier<double> _videoScale = ValueNotifier<double>(1.0);
 
-  /// Engine gain (0..100) and screen brightness (0..1) for the vertical
-  /// swipe gestures. Volume here is the engine's, not the system volume.
-  double _volume = 100;
-  double _brightness = 1.0;
-  String? _gestureIndicator;
+  /// The video fit, owned here; the controls report changes through
+  /// onFitChanged and the video widget reads it.
+  VlcVideoFit _fit = VlcVideoFit.contain;
 
-  /// Speed (1.0 = normal).
-  double _speed = 1.0;
+  /// Fraction of the media fetched ahead of the playhead, for the seek
+  /// bar's buffered band.
+  final ValueNotifier<double> _bufferedFraction =
+      ValueNotifier<double>(0.0);
 
-  /// Centre flash after a double-tap seek / play-pause ("+10s", "❚❚").
-  String? _flash;
-  Timer? _flashTimer;
+  /// Whether this media has a subtitle to pick — an embedded track the
+  /// engine has published, or a file the source shipped. The subtitles
+  /// button is only there when there is one.
+  final ValueNotifier<bool> _hasSubtitles = ValueNotifier<bool>(false);
+
+  /// Whether the screen is locked against accidental touches.
+  final ValueNotifier<bool> _locked = ValueNotifier<bool>(false);
+
+  /// What the side panel shows, published from every place it changes.
+  final ValueNotifier<PanelData> _panelData =
+      ValueNotifier<PanelData>(PanelData.empty);
+
+  /// Intro/outro bands, usually empty — both sources are opt-in.
+  List<SkipSegment> _skipSegments = const <SkipSegment>[];
+
+  /// The episode being played, and the route token for it. Both move on an
+  /// advance; the panel and the next/previous arrows read them.
+  Episode? _currentEpisode;
+  late String _currentVideoUrl;
+
+  /// An episode advance in flight.
+  bool _advancing = false;
+
+  /// The up-next card's episode, or null when no card is up.
+  Episode? _nextEpisodeOffer;
+
+  /// The viewer pressed Cancel on the up-next card.
+  bool _nextEpisodeDeclined = false;
+
+  /// The ended card's kind, or null when no card is up.
+  EndedKind? _ended;
+
+  /// The settings, live, for the panel's Subtitle style page. Updated from
+  /// the provider (see [_init]); the panel reads this, not the provider.
+  late final ValueNotifier<PlayerSettings> _playerSettings;
 
   /// Last position-update setState, so mpv's frequent ticks do not rebuild
   /// the whole screen at full rate.
@@ -214,15 +228,42 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   bool _disposed = false;
   final List<StreamSubscription<dynamic>> _subs = [];
 
-  PlayerBrightness get _brightnessApi => PlatformPlayerBrightness();
+  bool get _isSeries =>
+      widget.item.contentType == MultimediaContentType.series ||
+      widget.item.contentType == MultimediaContentType.anime;
+
+  bool get _isEpisodic => _isSeries && _currentEpisode != null;
+
+  bool get _canSeek => _duration > Duration.zero && !_isLive;
+
+  /// Whether an episode follows this one. Recomputed rather than cached so
+  /// it cannot go stale after an advance.
+  bool get _hasNextEpisode =>
+      nextEpisodeFor(
+        item: widget.item,
+        current: _currentEpisode,
+        videoUrl: _currentVideoUrl,
+      ).next !=
+      null;
+
+  Episode? get _previousEpisode => previousEpisodeFor(
+    item: widget.item,
+    current: _currentEpisode,
+    videoUrl: _currentVideoUrl,
+  );
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // Landscape on a portrait handset, as the VLC screen does; restored on
-    // the way out.
-    _forceLandscapeIfPortrait();
+    _currentEpisode = widget.episode;
+    _currentVideoUrl = widget.videoUrl;
+    // No landscape here: the source list shown before play stays portrait,
+    // and landscape is forced only when the video itself first starts
+    // playing (see the playing listener).
+    _chrome = ChromeVisibilityController(
+      isPlaying: () => _adapter.value.isPlaying,
+    );
     _init();
   }
 
@@ -230,20 +271,42 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   void dispose() {
     _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
-    _hideTimer?.cancel();
-    _flashTimer?.cancel();
     _watchdogTimer?.cancel();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
+    // Order matters: write first, tear down second. A stop after the write
+    // halts the audio now — the async dispose alone left it running after
+    // the screen was gone.
+    _flushProgress();
     try {
       _tracker?.finish();
     } catch (_) {
       // Tracking must never block leaving the player.
     }
+    _chrome.dispose();
+    _videoScale.dispose();
+    _bufferedFraction.dispose();
+    _hasSubtitles.dispose();
+    _locked.dispose();
+    _panelData.dispose();
+    _playerSettings.dispose();
+    unawaited(_player.stop());
     unawaited(_player.dispose());
+    _adapter.dispose();
     _restoreOrientation();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_disposed || !mounted) return;
+    // A backstop behind the pause flush: the position at the moment the
+    // app goes away is the one Continue Watching must have.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _flushProgress();
+    }
   }
 
   void _forceLandscapeIfPortrait() {
@@ -259,9 +322,32 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 
   void _restoreOrientation() {
+    // Force portrait on the way out: the player is the only landscape
+    // screen, and DeviceOrientation.values (all) does NOT rotate the
+    // device — it just lifts the pin, so the app stays sideways in
+    // landscape after Back. portraitUp rotates it back upright.
     unawaited(
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values),
+      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
     );
+  }
+
+  /// Leaves the player: stop the audio first, then portrait (so the rotation
+  /// starts with the exit transition), then the pop. dispose() repeats the
+  /// stop and the portrait as a safety net for a route that went any other
+  /// way.
+  void _goBack() {
+    _flushProgress();
+    unawaited(_player.stop());
+    _restoreOrientation();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  /// Writes the last known-good sample, bypassing the rate limit.
+  void _flushProgress() {
+    final sample = _sample;
+    final recorder = _recorder;
+    if (sample == null || recorder == null) return;
+    recorder.record(sample, lastStreamUrl: _selected?.url, force: true);
   }
 
   Future<void> _init() async {
@@ -304,6 +390,25 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       return;
     }
 
+    _adapter = MpvVlcController(
+      player: _player,
+      externalSubtitles: () => _selected?.subtitles ?? const [],
+      mediaTitle: () => widget.item.title,
+    );
+
+    // The panel's copy of the settings, kept live from the provider.
+    final settings =
+        ref.read(playerSettingsProvider).asData?.value ??
+        const PlayerSettings();
+    _playerSettings = ValueNotifier<PlayerSettings>(settings);
+    ref.listenManual<AsyncValue<PlayerSettings>>(
+      playerSettingsProvider,
+      (_, next) {
+        final value = next.asData?.value;
+        if (value != null && !_disposed) _playerSettings.value = value;
+      },
+    );
+
     _listen();
     await _resolveAndOpen();
   }
@@ -314,12 +419,28 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         if (_disposed) return;
         _playing = playing;
         if (playing) {
+          final firstPlay = !_startedPlaying;
           _startedPlaying = true;
           _watchdogTimer?.cancel();
+          if (firstPlay) {
+            // First frame of playback: the video itself has started, so
+            // now — and only now — rotate to landscape on a portrait
+            // handset. The source list shown before this stays portrait.
+            _forceLandscapeIfPortrait();
+            // And the source list's job is done: the video is up.
+            if (_stage == _Stage.resolving) {
+              _stage = _Stage.playing;
+            }
+          }
         } else {
           _tracker?.onPaused();
+          // Pausing is the viewer's own save point, so flush past the
+          // rate limit. A stall that auto-pauses the engine flushes the
+          // same way — the position is real either way.
+          _flushProgress();
         }
-        _showControlsBriefly();
+        _publishAdapter();
+        _chrome.poke();
         setState(() {});
       }),
     );
@@ -327,17 +448,29 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.position.listen((position) {
         if (_disposed) return;
         _position = position;
-        // Feed the tracker, as the VLC screen does: only samples taken while
-        // playing count toward history / watched.
+        // Feed the tracker and the Continue Watching recorder from the
+        // same sample: only samples taken while playing count toward
+        // history / watched, and the token ties them to this session.
         if (_playing && _duration > Duration.zero) {
-          _tracker?.onPlaying(
-            ProgressSample(
-              position: position,
-              duration: _duration,
-              token: _sessionToken,
-            ),
+          final sample = ProgressSample(
+            position: position,
+            duration: _duration,
+            token: _sessionToken,
           );
+          _tracker?.onPlaying(sample);
+          if (sample.isWritable) {
+            _sample = sample;
+            _recorder?.record(sample, lastStreamUrl: _selected?.url);
+          }
         }
+        // A livestream has no position to store, but Continue Watching
+        // still needs the row.
+        if (!_recordedLivestream &&
+            widget.item.contentType == MultimediaContentType.livestream) {
+          _recordedLivestream = true;
+          _recorder?.recordLivestream();
+        }
+        _publishAdapter();
         // Throttle UI rebuilds: the bar only needs ~5 updates a second.
         final now = DateTime.now();
         if (now.difference(_lastPositionUi) >=
@@ -351,6 +484,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.duration.listen((duration) {
         if (_disposed) return;
         _duration = duration;
+        _publishAdapter();
         setState(() {});
       }),
     );
@@ -358,33 +492,46 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.buffer.listen((buffered) {
         if (_disposed) return;
         _buffered = buffered;
+        _bufferedFraction.value = _canSeek
+            ? (_buffered.inMilliseconds / _duration.inMilliseconds).clamp(
+                0.0,
+                1.0,
+              )
+            : 0.0;
+        _publishAdapter();
         setState(() {});
       }),
     );
     _subs.add(
-      _player.stream.buffering.listen((buffering) {
+      _player.stream.buffering.listen((_) {
         if (_disposed) return;
-        _buffering = buffering;
+        _publishAdapter();
         setState(() {});
       }),
     );
     _subs.add(
       _player.stream.completed.listen((completed) {
         if (_disposed) return;
-        _completed = completed;
         if (completed) {
+          _flushProgress();
           try {
             _tracker?.finish();
           } catch (_) {}
-          _showControls();
+          _chrome.poke();
+          _onEnded();
         }
+        _publishAdapter();
         setState(() {});
       }),
     );
     _subs.add(
       _player.stream.tracks.listen((_) {
         if (_disposed) return;
+        _applyRememberedTracks();
         _applySubtitleAutoSelect();
+        _updateHasSubtitles();
+        _adapter.noteTracksChanged();
+        _publishPanelData();
         setState(() {});
       }),
     );
@@ -392,6 +539,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.error.listen((message) {
         if (_disposed) return;
         if (kDebugMode) debugPrint('mpv error: $message');
+        _adapter.noteError(message);
         // A dead source fails over; an error mid-play just shows in the log
         // — the watchdog owns startup, and a mid-play error is usually a
         // transient network hiccup mpv recovers from on its own.
@@ -400,20 +548,27 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     );
   }
 
+  /// Rebuilds the adapter's published value from the engine's state, so
+  /// the stock chrome and panel always read mpv's truth.
+  void _publishAdapter() {
+    if (_disposed) return;
+    _adapter.publish();
+  }
+
   Future<void> _resolveAndOpen() async {
     if (_disposed) return;
     try {
       final resolved = await resolvePlayback(
         read: ref.read,
         item: widget.item,
-        videoUrl: widget.videoUrl,
+        videoUrl: _currentVideoUrl,
         preloadedStreams: widget.preloadedStreams,
       );
       final resume = await resolveResumePoint(
         read: ref.read,
         item: widget.item,
-        episode: widget.episode,
-        videoUrl: widget.videoUrl,
+        episode: _currentEpisode,
+        videoUrl: _currentVideoUrl,
       );
       if (_disposed) return;
       _streams = resolved.streams;
@@ -422,30 +577,37 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       // Only a real livestream is LIVE; an HLS VOD reports its duration once
       // mpv reads the playlist, and _canSeek stays off until then.
       _isLive = widget.item.contentType == MultimediaContentType.livestream;
-      setState(() => _stage = _Stage.playing);
+      _publishPanelData();
+      unawaited(_loadSkipSegments(_currentEpisode));
       _tracker = PlaybackTracker(
         read: ref.read,
         item: widget.item,
-        episode: widget.episode,
-        videoUrl: widget.videoUrl,
+        episode: _currentEpisode,
+        videoUrl: _currentVideoUrl,
         token: ++_sessionToken,
+      );
+      _recorder = PlaybackProgressRecorder(
+        read: ref.read,
+        item: widget.item,
+        episode: _currentEpisode,
+        videoUrl: _currentVideoUrl,
+        token: _sessionToken,
       );
       await _openStream(_streamIndex, start: _resumePosition);
     } on StreamResolutionException catch (e) {
       if (_disposed) return;
       setState(() {
         _stage = _Stage.failed;
-        _error = describeStreamFailure(
-          AppLocalizations.of(context)!,
-          e,
-        );
+        _error = describeStreamFailure(AppLocalizations.of(context)!, e);
       });
+      _publishPanelData();
     } catch (e) {
       if (_disposed) return;
       setState(() {
         _stage = _Stage.failed;
         _error = 'Could not load sources: $e';
       });
+      _publishPanelData();
     }
   }
 
@@ -454,15 +616,25 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _streamIndex = index;
     _startedPlaying = false;
     _subtitleAppliedFor = -1;
+    _adapter.clearError();
     final stream = _streams[index];
     _sessionToken++;
     _tracker = PlaybackTracker(
       read: ref.read,
       item: widget.item,
-      episode: widget.episode,
-      videoUrl: widget.videoUrl,
+      episode: _currentEpisode,
+      videoUrl: _currentVideoUrl,
       token: _sessionToken,
     );
+    _recorder = PlaybackProgressRecorder(
+      read: ref.read,
+      item: widget.item,
+      episode: _currentEpisode,
+      videoUrl: _currentVideoUrl,
+      token: _sessionToken,
+    );
+    _sample = null;
+    _publishPanelData();
     try {
       await _player.open(
         Media(
@@ -474,6 +646,8 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       );
     } catch (e) {
       if (kDebugMode) debugPrint('mpv open failed: $e');
+      _failedStreams.add(index);
+      _publishPanelData();
       _tryNextStream();
       return;
     }
@@ -489,6 +663,8 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       if (kDebugMode) {
         debugPrint('mpv watchdog: no playback in $_kStartupWatchdog');
       }
+      _failedStreams.add(_streamIndex);
+      _publishPanelData();
       _tryNextStream();
     });
   }
@@ -501,6 +677,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         _stage = _Stage.failed;
         _error = 'No working source found.';
       });
+      _publishPanelData();
       return;
     }
     // Fail over near where the viewer was, rather than from the top.
@@ -510,11 +687,47 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     unawaited(_openStream(next, start: resumeAt));
   }
 
+  /// A row picked on the startup list, before anything is playing: open
+  /// that source instead of the one the auto-open chose. The list stays up
+  /// until the picked source plays, so a pick that fails falls over to the
+  /// next one the same way.
+  void _pickFromStartup(int index) {
+    if (_disposed || index < 0 || index >= _streams.length) return;
+    if (index == _streamIndex && !_startedPlaying) return;
+    unawaited(_openStream(index, start: _position));
+  }
+
+  /// A source picked in the panel's Sources tab: open it from where the
+  /// viewer was, as the stock screen does.
+  Future<void> _pickSource(int index) async {
+    if (_disposed || index < 0 || index >= _streams.length) return;
+    if (index == _streamIndex) return;
+    await _openStream(index, start: _position);
+  }
+
+  /// Re-applies the audio/subtitle picks the viewer made in the panel, when
+  /// a new source reports its tracks (mpv resets tracks to auto on open).
+  void _applyRememberedTracks() {
+    final audioId = _rememberedAudioId;
+    if (audioId != null) {
+      unawaited(_adapter.setAudioTrack(audioId));
+    }
+    final subtitleId = _rememberedSubtitleId;
+    if (subtitleId != null) {
+      unawaited(_adapter.setSubtitleTrack(subtitleId));
+    }
+  }
+
   /// Picks a subtitle without being asked: the plugin's own subtitle file
   /// first (usually the right language), else the first embedded track.
-  /// Runs once per source, when mpv reports its tracks.
+  /// Runs once per source, when mpv reports its tracks — and never over a
+  /// pick the viewer already made.
   void _applySubtitleAutoSelect() {
     if (_disposed || _subtitleAppliedFor == _streamIndex) return;
+    if (_rememberedSubtitleId != null) {
+      _subtitleAppliedFor = _streamIndex;
+      return;
+    }
     final stream = _selected;
     if (stream == null) return;
     final embedded = _player.state.tracks.subtitle;
@@ -535,392 +748,378 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     }
   }
 
-  // -- transport -----------------------------------------------------------
-
-  Future<void> _togglePlayPause() async {
-    if (_completed) {
-      await _player.seek(Duration.zero);
-      await _player.play();
-      return;
-    }
-    await _player.playOrPause();
-  }
-
-  Future<void> _seekBy(Duration delta) async {
-    if (_duration <= Duration.zero) return;
-    final target = _clampDuration(
-      _position + delta,
-      Duration.zero,
-      _duration,
-    );
-    _flashSeek(delta);
-    await _player.seek(target);
-  }
-
-  Future<void> _seekTo(Duration target) async {
-    if (_duration <= Duration.zero) return;
-    await _player.seek(
-      _clampDuration(target, Duration.zero, _duration),
-    );
-  }
-
-  /// Duration has no `clamp`; this is the same bound, in milliseconds.
-  Duration _clampDuration(Duration value, Duration min, Duration max) {
-    if (value < min) return min;
-    if (value > max) return max;
-    return value;
-  }
-
-  Future<void> _setSpeed(double speed) async {
-    _speed = speed;
-    await _player.setRate(speed);
-    if (mounted) setState(() {});
-  }
-
-  // -- subtitles / audio / source sheets -----------------------------------
-
-  Future<void> _pickSubtitle() async {
+  /// Whether the subtitles button shows at all: only when this media has a
+  /// subtitle to pick — an embedded track, or a file the source shipped.
+  void _updateHasSubtitles() {
     final embedded = _player.state.tracks.subtitle;
     final external = _selected?.subtitles ?? const [];
-    if (!mounted) return;
-    final choice = await showModalBottomSheet<SubtitleTrack?>(
-      context: context,
-      backgroundColor: const Color(0xff181818),
-      builder: (context) {
-        final current = _player.state.track.subtitle;
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              ListTile(
-                title: const Text(
-                  'Off',
-                  style: TextStyle(color: Colors.white),
-                ),
-                trailing: current.id == 'no'
-                    ? const Icon(Icons.check, color: Color(0xffd4af37))
-                    : null,
-                onTap: () => Navigator.pop(context, SubtitleTrack.no()),
-              ),
-              for (final sub in external)
-                ListTile(
-                  title: Text(
-                    '${sub.label} (source)',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  trailing: current.title == sub.label
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(
-                    context,
-                    SubtitleTrack.uri(sub.url, title: sub.label),
-                  ),
-                ),
-              for (final sub in embedded)
-                ListTile(
-                  title: Text(
-                    sub.title ?? 'Subtitle ${sub.id}',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  trailing: current.id == sub.id
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(context, sub),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-    if (choice != null) {
-      await _player.setSubtitleTrack(choice);
-      if (mounted) setState(() {});
-    }
+    _hasSubtitles.value = embedded.isNotEmpty || external.isNotEmpty;
   }
 
-  Future<void> _pickAudio() async {
-    final tracks = _player.state.tracks.audio;
-    if (!mounted || tracks.isEmpty) return;
-    final choice = await showModalBottomSheet<AudioTrack?>(
-      context: context,
-      backgroundColor: const Color(0xff181818),
-      builder: (context) {
-        final current = _player.state.track.audio;
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              for (final track in tracks)
-                ListTile(
-                  title: Text(
-                    track.title ?? 'Audio ${track.id}',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  subtitle: track.language == null
-                      ? null
-                      : Text(
-                          track.language!,
-                          style: const TextStyle(color: Colors.white54),
-                        ),
-                  trailing: current.id == track.id
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(context, track),
-                ),
-            ],
-          ),
-        );
-      },
+  /// Looks up intro/outro segments in the background.
+  ///
+  /// Never awaited by the open path: both sources are network lookups
+  /// against crowdsourced databases, and playback must not wait on a
+  /// convenience.
+  Future<void> _loadSkipSegments(Episode? episode) async {
+    if (episode == null) return;
+    final segments = await fetchSkipSegments(
+      read: ref.read,
+      item: widget.item,
+      episode: episode,
     );
-    if (choice != null) {
-      await _player.setAudioTrack(choice);
-      if (mounted) setState(() {});
-    }
+    if (_disposed || segments.isEmpty) return;
+    setState(() => _skipSegments = segments);
   }
 
-  Future<void> _pickSource() async {
-    if (!mounted || _streams.length < 2) return;
-    final choice = await showModalBottomSheet<int>(
-      context: context,
-      backgroundColor: const Color(0xff181818),
-      builder: (context) {
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              for (var i = 0; i < _streams.length; i++)
-                ListTile(
-                  title: Text(
-                    _streams[i].displaySource,
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  trailing: i == _streamIndex
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(context, i),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-    if (choice != null && choice != _streamIndex) {
-      await _openStream(choice, start: _position);
-    }
-  }
+  // -- panel ---------------------------------------------------------------
 
-  Future<void> _pickSpeed() async {
-    if (!mounted) return;
-    const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
-    final choice = await showModalBottomSheet<double>(
-      context: context,
-      backgroundColor: const Color(0xff181818),
-      builder: (context) {
-        return SafeArea(
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              for (final speed in speeds)
-                ListTile(
-                  title: Text(
-                    '${speed}x',
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                  trailing: speed == _speed
-                      ? const Icon(Icons.check, color: Color(0xffd4af37))
-                      : null,
-                  onTap: () => Navigator.pop(context, speed),
-                ),
-            ],
-          ),
-        );
-      },
-    );
-    if (choice != null) await _setSpeed(choice);
-  }
-
-  // -- gestures -------------------------------------------------------------
-
-  void _showControls() {
+  /// What the side panel shows, published from every place it changes.
+  void _publishPanelData() {
     if (_disposed) return;
-    _controlsVisible = true;
-    _hideTimer?.cancel();
-    _hideTimer = Timer(_kControlsAutoHide, () {
-      if (_disposed) return;
-      setState(() => _controlsVisible = false);
-    });
-    if (mounted) setState(() {});
+    _panelData.value = PanelData(
+      sources: _streams,
+      currentSourceIndex: _stage == _Stage.failed ? -1 : _streamIndex,
+      failedSources: Set<int>.unmodifiable(_failedStreams),
+      playedSources: _startedPlaying
+          ? <int>{_streamIndex}
+          : const <int>{},
+      // mpv's ABR picks the rendition: no quality ladder, so no Quality tab.
+      qualityLadder: const <int>[],
+      episodes: effectiveEpisodes(widget.item, _currentEpisode),
+      currentEpisode: _currentEpisode,
+      subtitleTarget: SubtitleSearchTarget.of(widget.item, _currentEpisode),
+    );
   }
 
-  void _showControlsBriefly() {
-    // A play/pause change brings the bars up, then they hide themselves.
-    _showControls();
-  }
-
-  void _toggleControls() {
-    if (_controlsVisible) {
-      _hideTimer?.cancel();
-      setState(() => _controlsVisible = false);
-    } else {
-      _showControls();
+  /// Opens the stock options panel on [tab]. The panel reads the adapter
+  /// for its track lists and the screen for its data and callbacks.
+  Future<void> _openPanel(PlayerPanelTab tab) async {
+    if (_disposed || !mounted) return;
+    _chrome.poke(hold: true);
+    try {
+      await showPlayerPanel(
+        context,
+        controller: _adapter,
+        initialTab: tab,
+        data: _panelData,
+        onPickSource: (index) => unawaited(_pickSource(index)),
+        onPickEpisode: (episode) => unawaited(_pickEpisode(episode)),
+        episodeProgress: _episodeProgressFor,
+        onAudioPicked: (track) {
+          // Remembered across failover: the next source re-applies it.
+          _rememberedAudioId = track.id;
+        },
+        subtitleStyle: SubtitleStyleBinding(
+          settings: _playerSettings,
+          notifier: () => ref.read(playerSettingsProvider.notifier),
+        ),
+      );
+    } finally {
+      _chrome.release();
     }
   }
 
-  void _flashSeek(Duration delta) {
-    final seconds = delta.inSeconds;
-    _flash = seconds > 0 ? '+${seconds}s' : '${seconds}s';
-    _flashTimer?.cancel();
-    _flashTimer = Timer(const Duration(milliseconds: 900), () {
-      if (_disposed) return;
-      setState(() => _flash = null);
-    });
-    setState(() {});
+  /// How much of [episode] the viewer has already seen, for the panel's
+  /// Episodes tab. Asked per row as the list builds it, never precomputed.
+  EpisodeProgress _episodeProgressFor(Episode episode) {
+    final mainUrl = widget.item.url;
+    if (ref.read(episodeWatchRepositoryProvider).isWatched(mainUrl, episode)) {
+      return const EpisodeProgress(watched: true);
+    }
+    final history = ref.read(historyRepositoryProvider);
+    final duration = history.getEpisodeDuration(
+      episode.url,
+      mainUrl: mainUrl,
+      season: episode.season,
+      episode: episode.episode,
+    );
+    if (duration <= 0) return EpisodeProgress.none;
+    final position = history.getEpisodePosition(
+      episode.url,
+      mainUrl: mainUrl,
+      season: episode.season,
+      episode: episode.episode,
+    );
+    return EpisodeProgress(fraction: (position / duration).clamp(0.0, 1.0));
   }
 
-  void _flashPlayPause() {
-    _flash = _playing ? '❚❚' : '▶';
-    _flashTimer?.cancel();
-    _flashTimer = Timer(const Duration(milliseconds: 700), () {
-      if (_disposed) return;
-      setState(() => _flash = null);
-    });
-    setState(() {});
-  }
+  // -- episodes -------------------------------------------------------------
 
-  void _onDoubleTapDown(TapDownDetails details) {
-    final width = MediaQuery.sizeOf(context).width;
-    final x = details.globalPosition.dx;
-    if (x < width / 3) {
-      unawaited(_seekBy(-_kSeekStep));
-    } else if (x > width * 2 / 3) {
-      unawaited(_seekBy(_kSeekStep));
-    } else {
-      unawaited(_togglePlayPause());
-      _flashPlayPause();
+  /// Switches to another episode in place: the current episode's progress
+  /// is flushed, the engine is stopped, and the new episode resolves and
+  /// opens through the same startup list. A saved position on the new
+  /// episode resumes from there.
+  Future<void> _pickEpisode(Episode next) async {
+    if (_disposed || _advancing || next == _currentEpisode) return;
+    _advancing = true;
+    try {
+      _flushProgress();
+      try {
+        _tracker?.finish();
+      } catch (_) {}
+      rollForwardHistory(read: ref.read, item: widget.item, next: next);
+      await _startEpisode(next);
+    } finally {
+      _advancing = false;
     }
   }
 
-  void _onVerticalDragUpdate(DragUpdateDetails details, double width) {
-    final x = details.globalPosition.dx;
-    final delta = -details.delta.dy / 200;
-    if (x < width / 2) {
-      // Left half: brightness.
-      _brightness = (_brightness + delta).clamp(0.05, 1.0);
-      _brightnessApi.set(_brightness);
-      _gestureIndicator =
-          'Brightness ${(_brightness * 100).round()}%';
-    } else {
-      // Right half: engine volume.
-      _volume = (_volume + delta * 100).clamp(0.0, 100.0);
-      unawaited(_player.setVolume(_volume));
-      _gestureIndicator = 'Volume ${_volume.round()}%';
-    }
-    setState(() {});
+  /// The next episode, or the previous one, from the chrome's arrows.
+  Future<void> _advance() async {
+    if (_disposed || _advancing) return;
+    final next = nextEpisodeFor(
+      item: widget.item,
+      current: _currentEpisode,
+      videoUrl: _currentVideoUrl,
+    ).next;
+    if (next == null) return;
+    await _pickEpisode(next);
   }
 
-  void _onVerticalDragEnd(_) {
-    _gestureIndicator = null;
-    if (mounted) setState(() {});
+  Future<void> _goToPreviousEpisode() async {
+    if (_disposed || _advancing) return;
+    final previous = _previousEpisode;
+    if (previous == null) return;
+    await _pickEpisode(previous);
+  }
+
+  Future<void> _startEpisode(Episode next) async {
+    _sample = null;
+    _streams = const [];
+    _streamIndex = 0;
+    _failedStreams.clear();
+    _startedPlaying = false;
+    _subtitleAppliedFor = -1;
+    _rememberedAudioId = null;
+    _rememberedSubtitleId = null;
+    _position = Duration.zero;
+    _duration = Duration.zero;
+    _buffered = Duration.zero;
+    _resumePosition = Duration.zero;
+    _recorder = null;
+    _skipSegments = const <SkipSegment>[];
+    _nextEpisodeOffer = null;
+    _nextEpisodeDeclined = false;
+    _ended = null;
+    _currentEpisode = next;
+    _currentVideoUrl = next.url;
+    await _player.stop();
+    if (_disposed) return;
+    setState(() => _stage = _Stage.resolving);
+    _publishPanelData();
+    await _resolveAndOpen();
+  }
+
+  // -- ended / up-next ------------------------------------------------------
+
+  /// The engine reached the end of the media. Everything that is a failure
+  /// wearing an ending's clothes is caught before this (the watchdog, the
+  /// failover); here the film or episode really finished.
+  void _onEnded() {
+    if (_disposed || !mounted) return;
+    // A next episode, not yet declined: offer it (the countdown card).
+    // Otherwise the ended card, finished or declined-next.
+    if (_hasNextEpisode && !_nextEpisodeDeclined) {
+      _offerNextEpisodeNow();
+      return;
+    }
+    _showEnded(
+      _nextEpisodeDeclined ? EndedKind.declinedNext : EndedKind.finished,
+    );
+  }
+
+  /// Raises the up-next countdown card for the following episode.
+  void _offerNextEpisodeNow() {
+    if (_disposed || !mounted) return;
+    if (_advancing || _isLive) return;
+    final next = nextEpisodeFor(
+      item: widget.item,
+      current: _currentEpisode,
+      videoUrl: _currentVideoUrl,
+    ).next;
+    if (next == null) return;
+    setState(() {
+      _nextEpisodeDeclined = false;
+      _nextEpisodeOffer = next;
+    });
+  }
+
+  void _showEnded(EndedKind kind) {
+    if (_disposed || !mounted || _ended == kind) return;
+    // The card unmounts the whole controls subtree, and the unlock chip
+    // goes with it, so a lock left standing here would have nothing on
+    // screen to undo it.
+    _locked.value = false;
+    setState(() => _ended = kind);
+  }
+
+  /// Plays the finished media again, from the top.
+  void _startOver() {
+    if (_disposed) return;
+    _sample = null;
+    _nextEpisodeDeclined = false;
+    _nextEpisodeOffer = null;
+    setState(() => _ended = null);
+    unawaited(_player.seek(Duration.zero));
+    unawaited(_player.play());
+  }
+
+  // -- chrome text ----------------------------------------------------------
+
+  String _chromeTitle(AppLocalizations l10n) {
+    final item = widget.item.title;
+    final episode = _currentEpisode;
+    if (episode == null || !_isEpisodic) return item;
+
+    final parts = <String>[item];
+    // Numbering only where the plugin actually populated it; a great many
+    // hand back zeroes, and `S0 E0` is worse than nothing.
+    if (episode.season > 0 && episode.episode > 0) {
+      parts.add(l10n.playerSeasonEpisode(episode.season, episode.episode));
+    }
+    final name = episode.name.trim();
+    // Dropped when it is the numbering again under another name, which is
+    // what a list with no real episode titles hands back.
+    if (name.isNotEmpty && name != item && !parts.contains(name)) {
+      parts.add(name);
+    }
+    return parts.join(' · ');
+  }
+
+  /// What the top bar's subtitle says: the source the picture is coming
+  /// from. Null where nothing is playing yet, and the bar then renders no
+  /// second line at all rather than an empty one.
+  String? _chromeSubtitle() {
+    final data = _panelData.value;
+    final index = data.currentSourceIndex;
+    if (index < 0 || index >= data.sources.length) return null;
+    final stream = data.sources[index];
+    return sourceProvider(stream) ?? sourceFactsOf(stream).title;
+  }
+
+  /// "S1 E3 · Episode name", for the startup list.
+  String? get _episodeLine {
+    final episode = _currentEpisode;
+    if (!_isSeries || episode == null) return null;
+    return 'S${episode.season} E${episode.episode} · ${episode.name}';
+  }
+
+  List<StartupRow> get _startupRows {
+    return <StartupRow>[
+      for (var i = 0; i < _streams.length; i++)
+        StartupRow(
+          label: _startupRowLabel(_streams[i]),
+          reachability: SourceReachability.notChecked,
+          playState: _failedStreams.contains(i)
+              ? SourcePlayState.failed
+              : i == _streamIndex
+                  ? (_startedPlaying
+                        ? SourcePlayState.playing
+                        : SourcePlayState.opening)
+                  : SourcePlayState.untried,
+        ),
+    ];
+  }
+
+  /// The plugin's own label for the source, led by its provider, with the
+  /// quality after it — "HubCloud · 1080p".
+  String _startupRowLabel(StreamResult stream) {
+    final base = sourceRowLabel(stream);
+    final quality = stream.quality;
+    return quality != null && quality > 0 ? '$base · ${quality}p' : base;
   }
 
   // -- build ----------------------------------------------------------------
 
-  String _format(Duration d) {
-    final total = math.max(0, d.inSeconds);
-    final h = total ~/ 3600;
-    final m = (total % 3600) ~/ 60;
-    final s = total % 60;
-    if (h > 0) {
-      return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-    }
-    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  /// Flips the handset the other way for the rest of this video (rotate
+  /// button). Only where the player turns the device at all.
+  void _flipOrientation() {
+    final orientation = MediaQuery.orientationOf(context);
+    unawaited(
+      SystemChrome.setPreferredOrientations([
+        orientation == Orientation.landscape
+            ? DeviceOrientation.landscapeRight
+            : DeviceOrientation.landscapeLeft,
+      ]),
+    );
   }
 
-  bool get _canSeek => _duration > Duration.zero && !_isLive;
+  BoxFit _boxFitFor(VlcVideoFit fit) {
+    return switch (fit) {
+      VlcVideoFit.cover => BoxFit.cover,
+      VlcVideoFit.fill => BoxFit.fill,
+      _ => BoxFit.contain,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    const gold = Color(0xffd4af37);
-    final position = _position;
-    final duration = _duration;
-    final bufferedFrac = _canSeek
-        ? (_buffered.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
-        : 0.0;
+    // The saved subtitle style, watched so a Style-tab change restyles the
+    // caption live. An unloaded provider reads as a fresh install.
+    final settings =
+        ref.watch(playerSettingsProvider).asData?.value ??
+        const PlayerSettings();
+    final profile = ref.watch(deviceProfileProvider).asData?.value;
+    final form = playerFormFactorOf(profile);
+    final canRotate = playerCanRotate(profile);
+    final isTv = form == PlayerFormFactor.tv;
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // Video + gestures.
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _toggleControls,
-            onDoubleTapDown: _onDoubleTapDown,
-            onScaleStart: (_) => _zoomBase = _zoom,
-            onScaleUpdate: (details) {
-              setState(() {
-                _zoom = (_zoomBase * details.scale).clamp(_kMinZoom, _kMaxZoom);
-              });
-            },
-            onVerticalDragUpdate: (details) => _onVerticalDragUpdate(
-              details,
-              MediaQuery.sizeOf(context).width,
+          // Video. The pinch zoom is a Transform over the picture, driven by
+          // the controls' gesture layer through [_videoScale].
+          ValueListenableBuilder<double>(
+            valueListenable: _videoScale,
+            builder: (context, scale, child) => Transform.scale(
+              scale: scale.clamp(_kMinZoom, _kMaxZoom),
+              alignment: Alignment.center,
+              child: child,
             ),
-            onVerticalDragEnd: _onVerticalDragEnd,
             child: Center(
-              child: Transform.scale(
-                scale: _zoom,
-                child: Video(
-                  controller: _videoController,
-                  fit: BoxFit.contain,
-                  fill: Colors.black,
-                  // Custom controls below; media_kit's own are hidden.
-                  controls: (_) => const SizedBox.shrink(),
-                  wakelock: true,
-                  pauseUponEnteringBackgroundMode: true,
-                  subtitleViewConfiguration: SubtitleViewConfiguration(
-                    style: const TextStyle(
-                      height: 1.4,
-                      fontSize: _kSubtitleFontSize,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                      backgroundColor: Color(0xaa000000),
-                    ),
-                    textAlign: TextAlign.center,
-                    padding: EdgeInsets.fromLTRB(
-                      16,
-                      0,
-                      16,
-                      _controlsVisible
-                          ? _kSubtitlePaddingControls
-                          : _kSubtitlePaddingHidden,
-                    ),
-                  ),
+              child: Video(
+                controller: _videoController,
+                fit: _boxFitFor(_fit),
+                fill: Colors.black,
+                // The stock controls below; media_kit's own are hidden.
+                controls: (_) => const SizedBox.shrink(),
+                wakelock: true,
+                pauseUponEnteringBackgroundMode: true,
+                subtitleViewConfiguration: mpvSubtitleViewConfiguration(
+                  settings,
+                  screenHeight: MediaQuery.sizeOf(context).height,
+                  controlsVisible: _chrome.value,
                 ),
               ),
             ),
           ),
 
-          // Resolving / failed states.
+          // Resolving: the source list. It stays up until the first source
+          // actually plays — the list is the control, and the first open is
+          // automatic. Portrait, until the video itself starts playing.
           if (_stage == _Stage.resolving)
-            Container(
-              color: Colors.black,
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(color: Color(0xffd4af37)),
-                    const SizedBox(height: 16),
-                    Text(
-                      l10n.loading,
-                      style: const TextStyle(color: Colors.white70),
-                    ),
-                  ],
-                ),
-              ),
+            PlayerStartupView(
+              title: widget.item.title,
+              episodeLine: _episodeLine,
+              logoUrl: widget.item.logoUrl,
+              backdropUrl: widget.item.backdropImageUrl,
+              sourceName: _selected?.displaySource,
+              status: _streams.isEmpty ? 'Getting links…' : null,
+              attempt: _streams.isEmpty
+                  ? null
+                  : (index: _streamIndex + 1, total: _streams.length),
+              rows: _startupRows,
+              currentIndex: _streams.isEmpty ? null : _streamIndex,
+              onPick: _pickFromStartup,
+              onBack: _goBack,
+              isTv: isTv,
             ),
+
+          // Failed: every link tried, or the resolve itself failed.
           if (_stage == _Stage.failed)
             Container(
               color: Colors.black,
@@ -950,6 +1149,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                               setState(() {
                                 _stage = _Stage.resolving;
                                 _error = null;
+                                _failedStreams.clear();
                               });
                               unawaited(_resolveAndOpen());
                             },
@@ -957,7 +1157,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                           ),
                           const SizedBox(width: 12),
                           OutlinedButton(
-                            onPressed: () => Navigator.of(context).pop(),
+                            onPressed: _goBack,
                             child: Text(l10n.cancel),
                           ),
                         ],
@@ -968,381 +1168,90 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               ),
             ),
 
-          // Buffering spinner (playing but waiting on data).
-          if (_stage == _Stage.playing && _playing && _buffering)
-            const Center(
-              child: CircularProgressIndicator(color: Color(0xffd4af37)),
-            ),
-
-          // Centre flash (±10 s / play-pause).
-          if (_flash != null)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _flash!,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+          // The stock chrome. Unmounted while the ended card or the up-next
+          // card is up, so their autofocus and Back handling own the route.
+          if (_stage == _Stage.playing &&
+              _ended == null &&
+              _nextEpisodeOffer == null)
+            RepaintBoundary(
+              child: VlcPlayerControls(
+                controller: _adapter,
+                bufferedFraction: _bufferedFraction,
+                chrome: _chrome,
+                fit: _fit,
+                videoScale: _videoScale,
+                onFitChanged: (fit) {
+                  if (!mounted) return;
+                  setState(() => _fit = fit);
+                },
+                onRotate: canRotate ? _flipOrientation : null,
+                title: _chromeTitle(l10n),
+                subtitle: _chromeSubtitle(),
+                onBack: _goBack,
+                onNextEpisode: _hasNextEpisode ? _advance : null,
+                onPreviousEpisode: _previousEpisode == null
+                    ? null
+                    : _goToPreviousEpisode,
+                onOpenPanel: _openPanel,
+                panelTabs: _panelData.value.tabs,
+                hasSubtitles: _hasSubtitles,
+                // No PiP on mpv: no button is rendered.
+                onEnterPip: null,
+                isLive: _isLive,
+                skipSegments: _skipSegments,
+                onSkipOutro: _hasNextEpisode ? _offerNextEpisodeNow : null,
+                promptVisible:
+                    _nextEpisodeOffer != null || _ended != null,
+                // Phone and tablet only, and null — not false — anywhere
+                // else: with nothing here the controls have no padlock.
+                locked: form.isTouch ? _locked : null,
+                brightnessFactory: () => PlatformPlayerBrightness(),
               ),
             ),
 
-          // Volume / brightness indicator.
-          if (_gestureIndicator != null)
-            Align(
-              alignment: Alignment.center,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  _gestureIndicator!,
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                ),
-              ),
+          // Up-next countdown card.
+          if (_nextEpisodeOffer != null)
+            NextEpisodeCountdown(
+              title: _nextEpisodeOffer!.name,
+              posterUrl: _nextEpisodeOffer!.posterUrl ?? widget.item.posterUrl,
+              season: _nextEpisodeOffer!.season,
+              episode: _nextEpisodeOffer!.episode,
+              onPlayNext: () {
+                final next = _nextEpisodeOffer;
+                if (next == null) return;
+                setState(() => _nextEpisodeOffer = null);
+                unawaited(_pickEpisode(next));
+              },
+              onCancel: () {
+                setState(() {
+                  _nextEpisodeDeclined = true;
+                  _nextEpisodeOffer = null;
+                });
+                _showEnded(EndedKind.declinedNext);
+              },
+              paused: !_playing,
+              isTv: isTv,
             ),
 
           // Ended card.
-          if (_stage == _Stage.playing && _completed)
-            Container(
-              color: Colors.black87,
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      widget.item.title,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        FilledButton.icon(
-                          onPressed: () async {
-                            await _player.seek(Duration.zero);
-                            await _player.play();
-                          },
-                          icon: const Icon(Icons.replay),
-                          label: const Text('Replay'),
-                        ),
-                        const SizedBox(width: 12),
-                        OutlinedButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: Text(l10n.close),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // Controls overlay.
-          if (_stage == _Stage.playing &&
-              _controlsVisible &&
-              !_completed)
-            _ControlsOverlay(
-              gold: gold,
-              title: widget.item.title,
-              isLive: _isLive,
-              playing: _playing,
-              buffering: _buffering,
-              position: position,
-              duration: duration,
-              bufferedFraction: bufferedFrac,
-              canSeek: _canSeek,
-              speed: _speed,
-              sourceLabel: _selected?.displaySource,
-              subtitleLabel: _player.state.track.subtitle.title,
-              onBack: () => Navigator.of(context).pop(),
-              onPlayPause: _togglePlayPause,
-              onSeekBack: () => unawaited(_seekBy(-_kSeekStep)),
-              onSeekForward: () => unawaited(_seekBy(_kSeekStep)),
-              onSeekTo: (value) => unawaited(
-                _seekTo(
-                  Duration(
-                    milliseconds: (value * duration.inMilliseconds).round(),
-                  ),
-                ),
-              ),
-              onSubtitle: _pickSubtitle,
-              onAudio: _pickAudio,
-              onSource: _streams.length > 1 ? _pickSource : null,
-              onSpeed: _pickSpeed,
-              format: _format,
+          if (_ended != null)
+            EndedCard(
+              title: _isEpisodic
+                  ? (_currentEpisode?.name ?? widget.item.title)
+                  : widget.item.title,
+              kind: _ended!,
+              onStartOver: _startOver,
+              onClose: _goBack,
+              onNextEpisode: _ended == EndedKind.declinedNext
+                  ? () {
+                      setState(() => _ended = null);
+                      unawaited(_advance());
+                    }
+                  : null,
+              isTv: isTv,
             ),
         ],
       ),
-    );
-  }
-}
-
-/// Top bar + bottom bar, Gold & Black like the rest of the app.
-class _ControlsOverlay extends StatelessWidget {
-  const _ControlsOverlay({
-    required this.gold,
-    required this.title,
-    required this.isLive,
-    required this.playing,
-    required this.buffering,
-    required this.position,
-    required this.duration,
-    required this.bufferedFraction,
-    required this.canSeek,
-    required this.speed,
-    required this.sourceLabel,
-    required this.subtitleLabel,
-    required this.onBack,
-    required this.onPlayPause,
-    required this.onSeekBack,
-    required this.onSeekForward,
-    required this.onSeekTo,
-    required this.onSubtitle,
-    required this.onAudio,
-    required this.onSource,
-    required this.onSpeed,
-    required this.format,
-  });
-
-  final Color gold;
-  final String title;
-  final bool isLive;
-  final bool playing;
-  final bool buffering;
-  final Duration position;
-  final Duration duration;
-  final double bufferedFraction;
-  final bool canSeek;
-  final double speed;
-  final String? sourceLabel;
-  final String? subtitleLabel;
-  final VoidCallback onBack;
-  final VoidCallback onPlayPause;
-  final VoidCallback onSeekBack;
-  final VoidCallback onSeekForward;
-  final ValueChanged<double> onSeekTo;
-  final VoidCallback onSubtitle;
-  final VoidCallback onAudio;
-  final VoidCallback? onSource;
-  final VoidCallback onSpeed;
-  final String Function(Duration) format;
-
-  @override
-  Widget build(BuildContext context) {
-    final positionFrac = canSeek && duration > Duration.zero
-        ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
-        : 0.0;
-    return Column(
-      children: [
-        // Top bar.
-        Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Colors.black87, Colors.transparent],
-            ),
-          ),
-          padding: EdgeInsets.only(
-            top: MediaQuery.paddingOf(context).top + 8,
-            left: 8,
-            right: 8,
-            bottom: 24,
-          ),
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: onBack,
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 16,
-                      ),
-                    ),
-                    if (sourceLabel != null)
-                      Text(
-                        sourceLabel!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white54,
-                          fontSize: 12,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (isLive)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text(
-                    'LIVE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              IconButton(
-                onPressed: onSubtitle,
-                icon: Icon(
-                  Icons.closed_caption,
-                  color: subtitleLabel == null ? Colors.white54 : gold,
-                ),
-                tooltip: 'Subtitles',
-              ),
-              IconButton(
-                onPressed: onAudio,
-                icon: const Icon(Icons.audiotrack, color: Colors.white),
-                tooltip: 'Audio',
-              ),
-              if (onSource != null)
-                IconButton(
-                  onPressed: onSource,
-                  icon: const Icon(Icons.swap_horiz, color: Colors.white),
-                  tooltip: 'Source',
-                ),
-              TextButton(
-                onPressed: onSpeed,
-                child: Text(
-                  '${speed}x',
-                  style: const TextStyle(color: Colors.white),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Spacer(),
-        // Bottom bar.
-        Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.bottomCenter,
-              end: Alignment.topCenter,
-              colors: [Colors.black87, Colors.transparent],
-            ),
-          ),
-          padding: EdgeInsets.only(
-            left: 12,
-            right: 12,
-            bottom: MediaQuery.paddingOf(context).bottom + 8,
-            top: 24,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Text(
-                    format(position),
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                  Expanded(
-                    child: SliderTheme(
-                      data: SliderTheme.of(context).copyWith(
-                        trackHeight: 4,
-                        thumbShape: const RoundSliderThumbShape(
-                          enabledThumbRadius: 7,
-                        ),
-                        overlayShape: const RoundSliderOverlayShape(
-                          overlayRadius: 14,
-                        ),
-                        activeTrackColor: gold,
-                        inactiveTrackColor: Colors.white24,
-                        secondaryActiveTrackColor: Colors.white38,
-                        thumbColor: gold,
-                      ),
-                      child: Slider(
-                        value: positionFrac,
-                        secondaryTrackValue: bufferedFraction,
-                        onChanged: canSeek ? onSeekTo : null,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    isLive ? 'LIVE' : format(duration),
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                ],
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    onPressed: canSeek ? onSeekBack : null,
-                    icon: const Icon(Icons.replay_10, color: Colors.white),
-                    iconSize: 30,
-                  ),
-                  const SizedBox(width: 16),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: gold,
-                      shape: BoxShape.circle,
-                    ),
-                    child: IconButton(
-                      onPressed: onPlayPause,
-                      icon: Icon(
-                        buffering
-                            ? Icons.hourglass_top
-                            : playing
-                                ? Icons.pause
-                                : Icons.play_arrow,
-                        color: Colors.black,
-                      ),
-                      iconSize: 34,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  IconButton(
-                    onPressed: canSeek ? onSeekForward : null,
-                    icon: const Icon(Icons.forward_10, color: Colors.white),
-                    iconSize: 30,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 }

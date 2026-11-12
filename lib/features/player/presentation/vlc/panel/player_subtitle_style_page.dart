@@ -228,6 +228,43 @@ class SubtitleStylePage extends StatelessWidget {
         choose: (lift) => _write((notifier) => notifier.setSubtitleRaise(lift)),
         rest: _fresh.subtitleRaise,
       ),
+      // Fine up/down nudge, like the original SkyStream: −10/−5 move the
+      // lines down, +5/+10 move them up, by 0.1 / 0.05 of the picture's
+      // height — the stock raise values themselves, so a nudge always lands
+      // on one. setSubtitleRaise holds the result to [0, 0.2].
+      Padding(
+        key: const ValueKey<String>('positionNudge'),
+        padding: const EdgeInsets.fromLTRB(18, 2, 18, 6),
+        child: Row(
+          children: <Widget>[
+            for (final (label, step) in <(String, double)>[
+              ('−10', -0.1),
+              ('−5', -0.05),
+              ('+5', 0.05),
+              ('+10', 0.1),
+            ])
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: OutlinedButton(
+                  onPressed: () => _write(
+                    (notifier) => notifier.setSubtitleRaise(raise + step),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white24),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  child: Text(label),
+                ),
+              ),
+          ],
+        ),
+      ),
     ];
   }
 

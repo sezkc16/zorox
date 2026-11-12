@@ -468,11 +468,12 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
   /// Its own notifier rather than a second meaning for [_toast]: the two are
   /// different shapes in different places, and a press must be able to replace
   /// a toast a swipe left behind, and the other way round.
+  ///
+  /// Kept even though [_showSeekBurst] no longer shows one (the viewer
+  /// asked for the seek without the centre pop-up): the overlay below
+  /// still reads it, and removing the plumbing would be a bigger diff than
+  /// the silence it carries.
   final TransientValue<SeekBurst> _burst = TransientValue<SeekBurst>();
-
-  /// Bumped on every burst so a second tap in the same direction, with the
-  /// same cumulative total, still replays the ripple. See [SeekBurst.revision].
-  int _burstRevision = 0;
 
   /// Torrent statistics are opt-in: useful when a stream is struggling,
   /// clutter the rest of the time.
@@ -1949,18 +1950,10 @@ class _VlcPlayerControlsState extends ConsumerState<VlcPlayerControls> {
   /// number is the chain's cumulative [offset] measured in that same
   /// direction. Where a reversal has carried the chain back past its origin
   /// the number goes negative and says so.
-  void _showSeekBurst(Duration delta, Duration offset) {
-    final bool forward = !delta.isNegative;
-    _burstRevision++;
-    _burst.show(
-      SeekBurst(
-        forward: forward,
-        seconds: (forward ? offset : -offset).inSeconds,
-        revision: _burstRevision,
-      ),
-      hideAfter: const Duration(milliseconds: 900),
-    );
-  }
+  /// The seek burst ("+10s" / "−10s") is deliberately not shown: the viewer
+  /// asked for the seek without the centre pop-up, on both engines. The
+  /// seek itself still lands (see [_seekBy]); only the burst is gone.
+  void _showSeekBurst(Duration delta, Duration offset) {}
 
   /// Adopts [target] as the position the next relative step counts from.
   ///

@@ -25,21 +25,17 @@ workflows:
         script: |
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Install CocoaPods dependencies
+        script: |
+          cd ios && pod install --repo-update
+
       - name: Build iOS unsigned
         script: |
-          flutter build ios --release --config-only
-          xcodebuild -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            DEVELOPMENT_TEAM=""
+          flutter build ios --release --no-codesign
 
       - name: Package unsigned IPA
         script: |
+          test -d build/ios/iphoneos/Runner.app || { echo "ERROR: Runner.app not found at build/ios/iphoneos/Runner.app"; exit 1; }
           mkdir -p Payload
           mv build/ios/iphoneos/Runner.app Payload/
           VERSION=$(grep '^version:' pubspec.yaml | cut -d ' ' -f 2 | cut -d '+' -f 1)

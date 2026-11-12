@@ -108,6 +108,13 @@ class PlayerSettings {
   /// How heavily the letters are outlined.
   final SubtitleOutline subtitleOutline;
 
+  /// Whether the letters carry a drop shadow instead of an outline.
+  ///
+  /// The mpv player's Style tab offers edge = none / outline / shadow; the
+  /// stock outline enum has no shadow, so this is the shadow's own flag.
+  /// libVLC ignores it (it only reads the outline).
+  final bool subtitleShadow;
+
   /// How far the lines are lifted from the bottom, as a share of the picture's
   /// height: one of [kSubtitleRaises].
   final double subtitleRaise;
@@ -226,6 +233,7 @@ class PlayerSettings {
     this.subtitleBackgroundColor = 0x00000000, // Transparent
     this.subtitleBackgroundOpacity = 0.5, // Default opacity (50%)
     this.subtitleOutline = SubtitleOutline.thin,
+    this.subtitleShadow = false,
     this.subtitleRaise = 0.0,
     this.subtitleBold = false,
     this.subtitleFont = SubtitleFont.standard,
@@ -269,6 +277,7 @@ class PlayerSettings {
     int? subtitleBackgroundColor,
     double? subtitleBackgroundOpacity,
     SubtitleOutline? subtitleOutline,
+    bool? subtitleShadow,
     double? subtitleRaise,
     bool? subtitleBold,
     SubtitleFont? subtitleFont,
@@ -315,6 +324,7 @@ class PlayerSettings {
       subtitleBackgroundOpacity:
           subtitleBackgroundOpacity ?? this.subtitleBackgroundOpacity,
       subtitleOutline: subtitleOutline ?? this.subtitleOutline,
+      subtitleShadow: subtitleShadow ?? this.subtitleShadow,
       subtitleRaise: subtitleRaise ?? this.subtitleRaise,
       subtitleBold: subtitleBold ?? this.subtitleBold,
       subtitleFont: subtitleFont ?? this.subtitleFont,
@@ -448,6 +458,12 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
           defaultValue: false,
         ) ??
         false;
+    final subShadow =
+        storage.getPlayerSetting<bool>(
+          'player_sub_shadow',
+          defaultValue: false,
+        ) ??
+        false;
     final subFont = SubtitleFont.values.firstWhere(
       (e) => e.name == storage.getPlayerSetting<String>('player_sub_font'),
       orElse: () => SubtitleFont.standard,
@@ -568,6 +584,7 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       subtitleBackgroundColor: subBg,
       subtitleBackgroundOpacity: subBgOpacity,
       subtitleOutline: subOutline,
+      subtitleShadow: subShadow,
       subtitleRaise: subRaise,
       subtitleBold: subBold,
       subtitleFont: subFont,
@@ -818,6 +835,13 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
     _update((PlayerSettings c) => c.copyWith(subtitleOutline: outline));
   }
 
+  /// The Style tab's edge = shadow: a drop shadow instead of an outline.
+  /// The mpv renderer reads this; libVLC ignores it.
+  Future<void> setSubtitleShadow(bool shadow) async {
+    await _repository.setPlayerSetting('player_sub_shadow', shadow);
+    _update((PlayerSettings c) => c.copyWith(subtitleShadow: shadow));
+  }
+
   /// Held to [kSubtitleRaises]' range, so a lift from an older or newer build
   /// lands inside what this one offers.
   Future<void> setSubtitleRaise(double raise) async {
@@ -893,6 +917,10 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       'player_sub_outline',
       fresh.subtitleOutline.name,
     );
+    await _repository.setPlayerSetting(
+      'player_sub_shadow',
+      fresh.subtitleShadow,
+    );
     await _repository.setPlayerSetting('player_sub_raise', fresh.subtitleRaise);
     await _repository.setPlayerSetting('player_sub_bold', fresh.subtitleBold);
     await _repository.setPlayerSetting(
@@ -915,6 +943,7 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
         subtitleBackgroundColor: fresh.subtitleBackgroundColor,
         subtitleBackgroundOpacity: fresh.subtitleBackgroundOpacity,
         subtitleOutline: fresh.subtitleOutline,
+        subtitleShadow: fresh.subtitleShadow,
         subtitleRaise: fresh.subtitleRaise,
         subtitleBold: fresh.subtitleBold,
         subtitleFont: fresh.subtitleFont,
