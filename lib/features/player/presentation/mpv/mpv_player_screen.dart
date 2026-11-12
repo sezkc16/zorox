@@ -80,9 +80,11 @@ import '../../../../core/utils/app_utils.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../settings/presentation/widgets/subtitle_appearance_settings.dart';
+import '../../../skip/data/skip_service.dart';
 import '../../domain/episode_navigator.dart';
 import '../../domain/playback_progress.dart';
 import '../../domain/playback_tracker.dart';
+import '../../domain/skip_segments.dart';
 import '../../domain/source_row_status.dart';
 import '../../domain/stream_resolver.dart';
 import '../../domain/track_language.dart';
@@ -188,6 +190,18 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// episode switch re-resolves for the new episode (see [_startEpisode]).
   late Episode? _episode;
   late String _videoUrl;
+
+  /// Intro/outro segments for the current episode (IntroDB + AnimeSkip,
+  /// the same crowdsourced source the libVLC player uses). Empty is
+  /// normal — most episodes have none, and then no chip shows. Works
+  /// for any series with timestamps: anime, drama, Netflix shows.
+  List<SkipSegment> _skipSegments = const <SkipSegment>[];
+
+  /// The segment Auto Skip just jumped over, so the position ticks that
+  /// land while the seek is still in flight do not fire it a second time.
+  /// Cleared the moment the position is outside every segment again, and
+  /// when a new episode's segments arrive.
+  SkipSegment? _autoSkippedSegment;
 
   /// Sources already aggregated by a source sheet. Route sources belong to
   /// the first episode only; an episode switch clears them (as the VLC
@@ -437,6 +451,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     unawaited(_checkPipSupport());
     _loadSubtitlePrefs();
     await _resolveAndOpen();
+    unawaited(_loadSkipSegments(_episode));
   }
 
   /// Reads the persisted subtitle position + style (the drag and the style
@@ -540,6 +555,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.position.listen((position) {
         if (_disposed) return;
         _position = position;
+        // Auto Skip: if the position just entered an intro/recap/outro
+        // segment and the setting is ON, jump to its end (once).
+        _maybeAutoSkip();
         // Feed the tracker, as the VLC screen does: only samples taken while
         // playing count toward history / watched.
         if (_playing && _duration > Duration.zero) {
@@ -806,6 +824,69 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// Switches to another episode: per-episode reset, then a fresh resolve
   /// for the new episode (which shows the pre-play source list again).
   /// Manual switching only — there is no auto-advance in v19.
+  /// Looks up intro/outro segments in the background.
+  ///
+  /// Never awaited by the open path: both sources are network lookups
+  /// against crowdsourced databases, and playback must not wait on a
+  /// convenience.
+  Future<void> _loadSkipSegments(Episode? episode) async {
+    if (episode == null) return;
+    final generation = _resolveGeneration;
+    final segments = await fetchSkipSegments(
+      read: ref.read,
+      item: widget.item,
+      episode: episode,
+    );
+    if (_disposed || generation != _resolveGeneration || segments.isEmpty) {
+      return;
+    }
+    setState(() => _skipSegments = segments);
+  }
+
+  /// Auto Skip (Settings → Player, default ON): when the position enters
+  /// an intro/recap/outro segment, jump to its end. The guard is why a
+  /// seek in flight does not re-fire: ticks still land inside the band
+  /// for a frame or two after `seekTo`.
+  void _maybeAutoSkip() {
+    final autoSkip =
+        ref.read(playerSettingsProvider).asData?.value.autoSkip ?? true;
+    if (!autoSkip) return;
+    if (!_playing) return;
+    if (_skipSegments.isEmpty) return;
+    final segment = segmentAt(_skipSegments, _position);
+    if (segment == null) {
+      _autoSkippedSegment = null;
+      return;
+    }
+    if (segment.type != SkipType.intro &&
+        segment.type != SkipType.recap &&
+        segment.type != SkipType.outro) {
+      return;
+    }
+    if (_sameSegment(segment, _autoSkippedSegment)) return;
+    _autoSkippedSegment = segment;
+    unawaited(
+      _seekTo(
+        Duration(milliseconds: (segment.endTime * 1000).round()),
+      ),
+    );
+  }
+
+  /// Same band (start + end + type), for the auto-skip guard.
+  bool _sameSegment(SkipSegment a, SkipSegment? b) =>
+      b != null &&
+      a.startTime == b.startTime &&
+      a.endTime == b.endTime &&
+      a.type == b.type;
+
+  static String _skipLabel(AppLocalizations l10n, SkipType type) =>
+      switch (type) {
+        SkipType.intro => l10n.skipIntro,
+        SkipType.outro => l10n.skipOutro,
+        SkipType.recap => l10n.skipRecap,
+        SkipType.unknown => l10n.skip,
+      };
+
   Future<void> _startEpisode(Episode next) async {
     if (_disposed) return;
     // Per-episode reset. The tracker and the resume point are rebuilt by
@@ -827,6 +908,8 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _resumePosition = Duration.zero;
     _watchdogTimer?.cancel();
     _preloaded = null; // route sources belong to the first episode only
+    _skipSegments = const []; // previous episode's intro/outro
+    _autoSkippedSegment = null;
     _episode = next;
     // A downloaded episode plays from disk, exactly as the details screen
     // does when it launches the first one.
@@ -843,6 +926,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _videoUrl = AppUtils.normalizeUrl(nextUrl);
     setState(() => _stage = _Stage.resolving);
     await _resolveAndOpen();
+    unawaited(_loadSkipSegments(next));
   }
 
   /// The episode list to navigate, filtered to one dub track when the series
@@ -2230,6 +2314,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     const gold = Color(0xffd4af37);
     final position = _position;
     final duration = _duration;
+    // The intro/recap/outro segment the position is inside right now,
+    // if any — drives the Skip Intro chip (and only that).
+    final skipSegment = segmentAt(_skipSegments, _position);
     final bufferedFrac = _canSeek
         ? (_buffered.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
@@ -2555,6 +2642,61 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                         ),
                       ],
                     ),
+                  ),
+                ),
+              ),
+            ),
+
+          // Skip Intro chip (bottom-right, above the bottom bar): shows
+          // only while the position is inside an intro/recap/outro
+          // segment — for any series with timestamps (anime, drama,
+          // Netflix shows). Tapping jumps to the end of the segment.
+          // When Auto Skip is ON the position never lingers here, so the
+          // chip is mostly seen when it is OFF. No chip when the episode
+          // has no segments.
+          if (skipSegment != null)
+            Positioned(
+              right: 16,
+              bottom: 110,
+              child: GestureDetector(
+                onTap: () {
+                  _autoSkippedSegment = skipSegment;
+                  unawaited(
+                    _seekTo(
+                      Duration(
+                        milliseconds: (skipSegment.endTime * 1000).round(),
+                      ),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 9,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xcc1a1a1a),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Colors.white12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.fast_forward_rounded,
+                        color: Color(0xffd4af37),
+                        size: 18,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        _skipLabel(l10n, skipSegment.type),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

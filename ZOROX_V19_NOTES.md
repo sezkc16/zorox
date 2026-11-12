@@ -110,6 +110,18 @@ sheets with a close handle / swipe-down to dismiss.
     1x, 1.25x, 1.5x, 1.75x, 2x, 3x; the current speed has a gold
     checkmark. Selecting one sets the rate persistently via
     `player.setRate`.
+15. **Skip Intro (all series, not just anime)** — intro/outro segments
+    come from the same crowdsourced source the libVLC player uses
+    (`fetchSkipSegments`: IntroDB by TMDB/IMDb id + AnimeSkip by AniList
+    id, both opt-in in settings; empty is normal). The segments are
+    looked up in the background on open and on each episode switch
+    (playback never waits on them). A gold "Skip Intro" chip (bottom-
+    right, above the bottom bar, localised "Skip Intro"/"Skip Recap"/
+    "Skip Outro") shows only while the position is inside a segment;
+    tapping it jumps to the segment's end. Auto Skip (Settings → Player,
+    default ON) jumps automatically on the position ticks, once per
+    segment (guarded so a seek in flight does not re-fire); when OFF,
+    only the chip shows. No chip when the episode has no timestamps.
 
 ## PiP (mpv) — the fork: `packages/media_kit_video_fork`
 
