@@ -54,11 +54,15 @@
 ///   * Volume is the engine's gain (`setVolume`), not the system volume the
 ///     VLC screen drives; brightness reuses the same platform channel as the
 ///     VLC screen ([PlatformPlayerBrightness]).
-///   * A mid-play stall watchdog ([_onStallTick]): the v17 lesson was a
-///     watchdog reading a pause as a stall, so this one only runs while
-///     the engine reports playing in the foreground — a pause, a
-///     backgrounded app and PiP never trip it. A stuck position re-seeks,
-///     then fails over to the next source, then shows the failed state.
+///   * A mid-play stall watchdog ([_onStallTick]): it fires for a frozen
+///     picture whether mpv reports playing-but-stuck or paused-while-
+///     waiting-for-data (a dry cache auto-pauses mpv, so `_playing` is
+///     false while `_buffering` is true — a deliberate pause has
+///     `_buffering` false, so the two are told apart). A stuck position
+///     re-seeks, then fails over to the next source, then shows the
+///     failed state. The cache itself is tuned aggressively
+///     ([_applyCacheTuning]: 600 s forward cache, 120 s readahead) so a
+///     slow host does not run the cache dry in the first place.
 ///
 /// The VLC screen stays in the repo untouched; the route points here for this
 /// test build, and flipping it back is a one-line change in `app_router.dart`.
@@ -453,6 +457,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   Duration? _scrubTarget;
   bool _scrubVisible = false;
   Timer? _scrubTimer;
+  // The fraction the finger is holding on the seek bar (null when not
+  // dragging): the thumb follows the finger while the engine is NOT
+  // sought on every move — the seek commits once, on release, as the
+  // VLC scrubber does. Seeking on every drag update floods mpv with
+  // seeks and the bar appears dead on a slow host.
+  double? _seekPreviewFrac;
 
   /// Tap the time display to show the remaining time ("-23:09")
   /// instead of elapsed/total. Session state.
@@ -474,9 +484,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _episode = widget.episode;
     _videoUrl = widget.videoUrl;
     _preloaded = widget.preloadedStreams;
-    // Landscape on a portrait handset, as the VLC screen does; restored on
-    // the way out.
-    _forceLandscapeIfPortrait();
+    // Do NOT force landscape here: the source-selection / loading screen
+    // is a portrait page and must stay upright while it is visible.
+    // Landscape is forced only once the video itself starts playing
+    // (see the playing-stream listener), as the VLC screen does.
     _init();
   }
 
@@ -504,6 +515,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _tracker?.finish();
     } catch (_) {
       // Tracking must never block leaving the player.
+    }
+    // Stop first (unless PiP is carrying the picture): dispose is async
+    // and unawaited, so a dispose that stalls leaves the audio running
+    // after the screen is gone. An explicit stop halts it now; dispose
+    // then releases the engine.
+    if (!_pipActive) {
+      unawaited(_player.stop());
     }
     unawaited(_player.dispose());
     _restoreOrientation();
@@ -576,9 +594,22 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 
   void _restoreOrientation() {
+    // Force portrait on the way out: the player is the only landscape
+    // screen, and DeviceOrientation.values (all) does NOT rotate the
+    // device — it just lifts the pin, so the app stays sideways in
+    // landscape after Back. portraitUp rotates it back upright.
     unawaited(
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values),
+      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]),
     );
+  }
+
+  /// Leaves the player: portrait first (so the rotation starts with the
+  /// exit transition, as the VLC screen's _handBack does), then the pop.
+  /// Used by both Back buttons; dispose restores portrait again as a
+  /// safety net for a route that went any other way.
+  void _goBack() {
+    _restoreOrientation();
+    if (mounted) Navigator.of(context).pop();
   }
 
   Future<void> _init() async {
@@ -620,6 +651,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       }
       return;
     }
+
+    // Aggressive cache / readahead for a slow remote source, before the
+    // first stream opens (see [_applyCacheTuning]): without it mpv's
+    // default readahead is small, the cache runs dry on a throttled
+    // host, and the picture stalls on Loading / freezes mid-play.
+    await _applyCacheTuning();
 
     _listen();
     _pipChannel.setMethodCallHandler(_onPipMethodCall);
@@ -717,9 +754,15 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         if (_disposed) return;
         _playing = playing;
         if (playing) {
+          final firstPlay = !_startedPlaying;
           _startedPlaying = true;
           _watchdogTimer?.cancel();
           _resetStallClock();
+          // First frame of playback: the video itself has started, so
+          // now — and only now — rotate to landscape on a portrait
+          // handset. The source-selection / loading screen shown before
+          // this stays portrait.
+          if (firstPlay) _forceLandscapeIfPortrait();
         } else {
           _tracker?.onPaused();
           // A pause is a last chance to write the position (the engine
@@ -973,7 +1016,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   void _abandonAndPop() {
     _resolveAbandoned = true;
     _abandonPendingResolve();
-    if (mounted) Navigator.of(context).pop();
+    _goBack();
   }
 
   Future<void> _openStream(int index, {Duration? start}) async {
@@ -1069,6 +1112,39 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _stallRecoveryStep = 0;
   }
 
+  /// Applies the aggressive mpv cache / readahead for a slow or throttled
+  /// remote source, before the first stream opens. Only `bufferSize`
+  /// (512 MiB forward + backward) was set before, and mpv's default
+  /// readahead is small — on a slow host (HiCine G-Direct) the cache ran
+  /// dry, mpv paused-for-cache, and the picture sat on Loading or froze
+  /// mid-play. A large forward cache (600 s, capped by the 512 MiB
+  /// demuxer limit) plus 120 s of readahead keeps frames arriving; an
+  /// accurate seek makes the watchdog's re-seek land exactly; a 30 s
+  /// network timeout keeps a dead read from hanging forever so the
+  /// watchdog / failover can recover it. Each write is best-effort (a
+  /// failed property only loses that one tuning, never playback).
+  Future<void> _applyCacheTuning() async {
+    final native = _player.platform as NativePlayer;
+    const props = <String, String>{
+      'cache': 'yes',
+      'cache-secs': '600',
+      'demuxer-max-bytes': '536870912',
+      'demuxer-max-back-bytes': '536870912',
+      'demuxer-readahead-secs': '120',
+      'hr-seek': 'yes',
+      'network-timeout': '30',
+    };
+    for (final entry in props.entries) {
+      try {
+        await native.setProperty(entry.key, entry.value);
+      } catch (_) {
+        if (kDebugMode) {
+          debugPrint('mpv cache tuning: ${entry.key} failed');
+        }
+      }
+    }
+  }
+
   /// Starts the mid-play stall watchdog. A periodic check (not a single
   /// timer): a stall has to persist across checks, and every recovery
   /// step gets its own window to work.
@@ -1081,15 +1157,31 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     );
   }
 
-  /// One stall check. Fires only while the engine genuinely reports
-  /// playing in the foreground — a pause, a backgrounded app and PiP are
-  /// all skipped (and the clock resets, so returning never trips it).
+  /// One stall check. It fires for a frozen picture whether mpv reports
+  /// playing-but-stuck or paused-while-waiting-for-data: when the cache
+  /// runs dry mpv auto-pauses ("paused-for-cache"), so `_playing` is
+  /// false and `_buffering` is true — a deliberate user pause has
+  /// `_buffering` false, so the two are told apart here (the v19.1 gate
+  /// returned on `!_playing` alone and never fired for a real stall).
+  /// Backgrounded app and PiP are skipped (and the clock resets, so
+  /// returning never trips it). Before playback has started at all the
+  /// startup watchdog owns the "never starts" case, not this one.
   void _onStallTick() {
-    if (_disposed || !_playing || !_foreground || _pipActive) {
+    if (_disposed || !_foreground || _pipActive) {
       _resetStallClock();
       return;
     }
     if (_isLive || _completed || _stage != _Stage.playing) {
+      _resetStallClock();
+      return;
+    }
+    if (!_startedPlaying) {
+      _resetStallClock();
+      return;
+    }
+    // Deliberate pause: not playing and not waiting for data. A cache
+    // stall is the opposite — mpv auto-paused while it waits for data.
+    if (!_playing && !_buffering) {
       _resetStallClock();
       return;
     }
@@ -3341,17 +3433,25 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               hasNextEpisode: _nextEpisode != null,
               pipAvailable: _pipAvailable,
               pipActive: _pipActive,
-              onBack: () => Navigator.of(context).pop(),
+              onBack: _goBack,
               onPlayPause: _togglePlayPause,
               onSeekBack: () => unawaited(_seekBy(-_kSeekStep)),
               onSeekForward: () => unawaited(_seekBy(_kSeekStep)),
-              onSeekTo: (value) => unawaited(
-                _seekTo(
-                  Duration(
-                    milliseconds: (value * duration.inMilliseconds).round(),
+              onSeekTo: (value) {
+                // Release commits the one seek; the preview is dropped
+                // so the thumb goes back to the engine's position.
+                setState(() => _seekPreviewFrac = null);
+                unawaited(
+                  _seekTo(
+                    Duration(
+                      milliseconds: (value * duration.inMilliseconds).round(),
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
+              seekPreviewFrac: _seekPreviewFrac,
+              onSeekPreview: (value) =>
+                  setState(() => _seekPreviewFrac = value),
               onSettings: () => unawaited(_showPanel(_PanelTab.sources)),
               onSubtitle: () =>
                   unawaited(_showPanel(_PanelTab.subtitles)),
@@ -3409,6 +3509,8 @@ class _ControlsOverlay extends StatelessWidget {
     required this.onSeekBack,
     required this.onSeekForward,
     required this.onSeekTo,
+    required this.seekPreviewFrac,
+    required this.onSeekPreview,
     required this.onSettings,
     required this.onSubtitle,
     required this.onAudio,
@@ -3445,6 +3547,10 @@ class _ControlsOverlay extends StatelessWidget {
   final VoidCallback onSeekBack;
   final VoidCallback onSeekForward;
   final ValueChanged<double> onSeekTo;
+  /// The drag preview (null when not dragging): the thumb follows the
+  /// finger without seeking the engine on every move.
+  final double? seekPreviewFrac;
+  final ValueChanged<double> onSeekPreview;
   final VoidCallback onSettings;
   final VoidCallback onSubtitle;
   final VoidCallback onAudio;
@@ -3464,6 +3570,9 @@ class _ControlsOverlay extends StatelessWidget {
     final positionFrac = canSeek && duration > Duration.zero
         ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
+    // While the finger drags the bar, the thumb shows the preview — the
+    // engine is only sought once, on release (see onChangeEnd below).
+    final shownFrac = seekPreviewFrac ?? positionFrac;
     // Never a raw URL on screen: for some launches the title (or the
     // source label) IS the stream URL, and the top bar would show it
     // as-is. The title falls back to the episode name / host; a URL-like
@@ -3629,9 +3738,13 @@ class _ControlsOverlay extends StatelessWidget {
                   thumbColor: gold,
                 ),
                 child: Slider(
-                  value: positionFrac,
+                  value: shownFrac,
                   secondaryTrackValue: bufferedFraction,
-                  onChanged: canSeek ? onSeekTo : null,
+                  // Drag moves the preview only; release commits the one
+                  // seek. Seeking on every drag update floods mpv and the
+                  // bar appears dead on a slow host.
+                  onChanged: canSeek ? onSeekPreview : null,
+                  onChangeEnd: canSeek ? onSeekTo : null,
                 ),
               ),
               Row(

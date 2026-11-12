@@ -124,6 +124,16 @@ public class VideoOutput: NSObject {
   /// Creates the texture of the requested kind, replacing any live one.
   /// Must run on the worker (the texture lives there).
   private func _createTexture(hardware: Bool) {
+    // A fresh texture starts with NO pixel buffers — they are created by
+    // resize(), which _updateCallback only calls when the video size
+    // CHANGES. The size does not change across a HW<->SW swap, so a
+    // swapped-in texture would never render a frame (the SW texture
+    // feeds PiP nothing and PiP start times out with no window; a
+    // swapped-back HW texture shows black after PiP stops) unless the
+    // size is forced to "changed". Resetting here covers every creation
+    // path (init, swap, retry); the next frame then resizes the new
+    // texture and renders into it.
+    currentSize = .zero
     if hardware {
       swTexture = nil
       let hw = TextureHW(
