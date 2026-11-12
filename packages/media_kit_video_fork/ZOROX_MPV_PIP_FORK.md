@@ -71,7 +71,11 @@ be done inside media_kit_video's native iOS code, hence the fork.
 - **`MediaKitVideoPlugin.swift`** — registers the PiP channel
   `dev.akash.skystream.mpv_pip` (methods `isSupported`, `start`,
   `stop`, `status`; events `onPipStarted` / `onPipStopped` back to
-  Dart), holds the Flutter view as the PiP layer host.
+  Dart). The host view is resolved **lazily at PiP start** from the key
+  window's root view (`flutterHostView()`): the v2 plugin registrar has
+  NO `view` accessor (CI proved it — `registrar.view()` is a compile
+  error in run 43245792512), and registration-time lookup would be too
+  early anyway (the window may not be set yet).
 
 ## Dart side (in the app, not this package)
 

@@ -41,12 +41,6 @@ public class MediaKitVideoPlugin: NSObject, FlutterPlugin {
     )
     instance.pipChannel = pipChannel
     registrar.addMethodCallDelegate(instance, channel: pipChannel)
-
-    // Fork: the view the PiP layer rides on (it must be in a visible
-    // window, or PiP is black).
-    #if canImport(Flutter)
-      instance.hostView = registrar.view()
-    #endif
   }
 
   private let channel: FlutterMethodChannel
@@ -55,8 +49,34 @@ public class MediaKitVideoPlugin: NSObject, FlutterPlugin {
 
   /// Fork: PiP state.
   private var pipChannel: FlutterMethodChannel?
-  private var hostView: UIView?
   private var pip: MpvPip?
+
+  /// The Flutter view the PiP display layer rides on. The layer must be
+  /// in a visible window with a non-zero frame, or PiP is black. Resolved
+  /// lazily at PiP start (the app is foreground then, so the window is
+  /// set); the v2 plugin registrar exposes no `view` accessor, so the key
+  /// window's root view is used instead.
+  #if canImport(Flutter)
+    private static func flutterHostView() -> UIView? {
+      let scenes = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+      for scene in scenes {
+        if let window = scene.windows.first(where: { $0.isKeyWindow }) {
+          if let view = window.rootViewController?.view {
+            return view
+          }
+        }
+      }
+      for scene in scenes {
+        if let window = scene.windows.first {
+          if let view = window.rootViewController?.view {
+            return view
+          }
+        }
+      }
+      return nil
+    }
+  #endif
 
   init(
     registry: FlutterTextureRegistry,
@@ -132,7 +152,7 @@ public class MediaKitVideoPlugin: NSObject, FlutterPlugin {
         details: nil
       ))
     }
-    guard let hostView = hostView else {
+    guard let hostView = Self.flutterHostView() else {
       return result(FlutterError(
         code: "no_host_view",
         message: "PiP needs a view in a window",
