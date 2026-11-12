@@ -10,7 +10,12 @@ import 'package:skystream/features/addons/presentation/addons_screen.dart';
 import 'package:skystream/features/addons/presentation/addon_detail_screen.dart';
 import 'package:skystream/features/addons/presentation/addon_catalog_screen.dart';
 import 'package:skystream/features/settings/presentation/settings_screen.dart';
-import 'package:skystream/features/player/presentation/vlc/vlc_player_screen.dart';
+// v18 (2.9.17) test build: the player route points at the mpv engine
+// (MpvPlayerScreen) so the user can compare it with v17 (libVLC). The VLC
+// screen stays in the repo untouched; to go back, point PlayerRoute at
+// VlcPlayerScreen again (import
+// features/player/presentation/vlc/vlc_player_screen.dart).
+import 'package:skystream/features/player/presentation/mpv/mpv_player_screen.dart';
 import '../../features/extensions/screens/extensions_screen.dart';
 import '../../features/nuvio/presentation/nuvio_plugins_screen.dart';
 import '../../features/cloudstream/presentation/cloudstream_screen.dart';
@@ -522,7 +527,7 @@ class PlayerRoute extends GoRouteData with $PlayerRoute {
 
   @override
   Widget build(BuildContext context, GoRouterState state) {
-    return VlcPlayerScreen(
+    return MpvPlayerScreen(
       item: $extra.item,
       videoUrl: $extra.videoUrl,
       episode: $extra.episode,

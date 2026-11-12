@@ -11,6 +11,7 @@ import 'package:flutter/rendering.dart' show debugRepaintRainbowEnabled;
 import 'package:flutter/services.dart'; // LogicalKeyboardKey, KeyDownEvent
 import 'package:flutter/foundation.dart'; // For kReleaseMode
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:challenge_browser/challenge_browser.dart' show PageDialog;
 
@@ -71,6 +72,15 @@ void main() async {
   installGlobalErrorHandlers();
 
   WidgetsFlutterBinding.ensureInitialized();
+
+  // The mpv engine (v18 test build): loads the bundled libmpv before any
+  // Player is created. A failure must never stop startup — the player screen
+  // surfaces it instead. (The VLC engine does not need this.)
+  try {
+    MediaKit.ensureInitialized();
+  } catch (e) {
+    if (kDebugMode) debugPrint('MediaKit.ensureInitialized failed: $e');
+  }
 
   // The bundled subtitle fonts (the Netflix face) must be readable files
   // before the first player is created - libVLC's freetype reads a path,
