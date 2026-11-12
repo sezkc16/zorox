@@ -579,8 +579,8 @@ void main() {
       );
       await sendFirstFrame(tester);
 
-      // 172 MB wanted (180 s at 1080p's 8 Mbit/s), rounded up to a step
-      // within the harness device's 256 MB cap.
+      // 287 MB wanted (300 s at 1080p's 8 Mbit/s), so no step within the
+      // harness device's 256 MB cap reaches it and the cache stops at the cap.
       expect(torrents.cacheMb, 256);
       final options =
           (engine.callsTo('setSource').last.arguments as Map)['mediaOptions']

@@ -63,14 +63,18 @@ void main() {
     await pumpPlayer(tester);
     await settle(tester);
 
+    // The instance sets a 512 MiB fallback ring (v17; 256 MiB before) so a
+    // backward seek has data waiting even for media the buffer plan does
+    // not size; each media brings its own read-ahead, which overrides it.
     expect(
       createdOptions().where((o) => o.contains('prefetch')),
-      isEmpty,
-      reason: 'the player keeps libVLC\'s own; each media brings its size',
+      ['--prefetch-buffer-size=524288'],
+      reason: 'the instance ring is the fallback; each media brings its size',
     );
     // The harness's 4 GB device with half of it free (a 256 MB cap), a film
-    // with no size and no label (8 Mbit/s assumed), on Wi-Fi: 180 s, 172 MB.
-    expect(lastMediaOptions(), contains(':prefetch-buffer-size=${172 * 1024}'));
+    // with no size and no label (8 Mbit/s assumed), on Wi-Fi: 300 s, 287 MB
+    // asked, 256 MB given — the cap binds.
+    expect(lastMediaOptions(), contains(':prefetch-buffer-size=${256 * 1024}'));
     expect(
       lastMediaOptions().where((o) => o.contains('stream-filter')),
       isEmpty,
@@ -84,17 +88,20 @@ void main() {
   ) async {
     // The two must not be confused again: a buffer measured in megabytes has
     // no business reaching the caching option, which is measured in
-    // milliseconds and is felt on every track switch.
+    // milliseconds and is felt on every track switch. The caching interval
+    // is kVodCachingMs (10000 ms), the deliberate latency budget pinned by
+    // network_caching_test.dart — not libVLC's 1000 ms default, and not a
+    // second value invented by the buffer.
     await pumpPlayer(tester);
     await settle(tester);
 
     expect(
       createdOptions().where((o) => o.startsWith('--network-caching=')),
-      ['--network-caching=1000'],
+      ['--network-caching=10000'],
     );
     expect(
       lastMediaOptions().where((o) => o.startsWith(':network-caching=')),
-      [':network-caching=1000'],
+      [':network-caching=10000'],
       reason: 'the buffer must not add a second caching option',
     );
 

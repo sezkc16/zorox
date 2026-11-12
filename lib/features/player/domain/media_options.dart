@@ -23,10 +23,11 @@ import 'network_buffer.dart';
 /// accumulate the whole interval before it emits, so a bigger value makes
 /// the stall after a seek that misses the window LONGER, not shorter, and
 /// HLS/DASH ignore the value entirely (their window is `:adaptive-maxbuffer`,
-/// 60–180 s from the buffer plan). The forward read-ahead that grows in v4
-/// is the prefetch ring instead (128 MiB). Backward seeks always re-fetch
-/// in libVLC 3 — its prefetch is forward-only — so no value here makes a
-/// backward step instant; that would take a cache in front of libVLC.
+/// 120–600 s from the buffer plan). The forward read-ahead that grows in v4
+/// is the prefetch ring instead (512 MiB in v17). Backward seeks always
+/// re-fetch in libVLC 3 — its prefetch is forward-only — so no value here
+/// makes a backward step instant; that would take a cache in front of
+/// libVLC.
 const int kVodCachingMs = 10000;
 
 /// The same for live TS, UDP, RTP and RTSP. A feed can't read ahead, so it

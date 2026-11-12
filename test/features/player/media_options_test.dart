@@ -59,13 +59,13 @@ void main() {
     test("a file's read-ahead and an HLS buffer come from the plan", () {
       expect(
         playbackMediaOptions(live: false, plan: plan(BufferMedia.httpFile)),
-        contains(':prefetch-buffer-size=${172 * 1024}'),
+        contains(':prefetch-buffer-size=${287 * 1024}'),
       );
       final hls = playbackMediaOptions(
         live: false,
         plan: plan(BufferMedia.adaptive),
       );
-      expect(hls, contains(':adaptive-maxbuffer=180000'));
+      expect(hls, contains(':adaptive-maxbuffer=300000'));
       expect(hls.where((o) => o.startsWith(':prefetch')), isEmpty);
     });
 

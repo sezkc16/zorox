@@ -191,10 +191,11 @@ void main() {
         await settle(tester);
       }
 
-      // The read-ahead the buffer rule gives the harness's film, 172 MB, at
-      // the rate the sampler measured - 1 MB/s, or half that where a reading
-      // lands a tick late.
-      const capacity = 172 * 1048576;
+      // The read-ahead the buffer rule gives the harness's film, 256 MB (the
+      // 256 MB cap binds: 300 s at 8 Mbit/s asks for 287 MB), at the rate
+      // the sampler measured - 1 MB/s, or half that where a reading lands
+      // a tick late.
+      const capacity = 256 * 1048576;
       expect(bandRatio(tester), greaterThan(0), reason: 'not blank');
       expect(
         bandRatio(tester),

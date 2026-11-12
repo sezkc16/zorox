@@ -635,7 +635,16 @@ final class VlcPlayerPlatformView: NSObject, VLCMediaPlayerDelegate {
     mediaPlayer.pause()
     pipPlaying = false
     pictureInPicture?.syncMediaClock()
-    sendSnapshot()
+    // Say "paused", don't read it: libVLC's state at the instant of the call
+    // can still be the .buffering it reported through healthy playback, and
+    // stateName maps .buffering with isPlaying false to "buffering". Dart
+    // then saw a frozen position under a state that is not paused, and read
+    // it as a stall - "Reconnecting..." and a reopen that lost the position
+    // - and the stale "buffering" snapshot refreshed
+    // pauseRequestsWhenRunning to the count the tap had already raised, so
+    // the real paused snapshot that followed read as a pause nobody asked
+    // for. The same override interruptPlayback already uses.
+    sendSnapshot(stateOverride: "paused")
   }
 
   func stop() {

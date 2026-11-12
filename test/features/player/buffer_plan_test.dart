@@ -55,24 +55,24 @@ void main() {
           runtime: twoHours,
         );
 
-    test('a 4 GB 1080p film reads 180 s ahead', () {
+    test('a 4 GB 1080p film reads 300 s ahead', () {
       final plan = film(3960000000, device(4096, freeMb: 3000));
       expect(plan.bitrateKbps, 4400);
       expect(plan.bitrateFrom, BitrateSource.sizeAndRuntime);
-      expect(plan.targetSeconds, 180);
-      expect(plan.ringMb, 95);
+      expect(plan.targetSeconds, 300);
+      expect(plan.ringMb, 158);
     });
 
-    test('the same on mobile data reads 60 s ahead', () {
+    test('the same on mobile data reads 120 s ahead', () {
       final plan = film(3960000000, device(4096, freeMb: 3000), metered: true);
-      expect(plan.targetSeconds, 60);
-      expect(plan.ringMb, 32);
+      expect(plan.targetSeconds, 120);
+      expect(plan.ringMb, 63);
     });
 
     test('a 20 GB 4K film fills the cap: 128 MB on a 2 GB TV', () {
       final plan = film(19800000000, device(2048, freeMb: 1200));
       expect(plan.bitrateKbps, 22000);
-      expect(plan.targetSeconds, 360);
+      expect(plan.targetSeconds, 600);
       expect(plan.ringMb, 128);
     });
 
@@ -80,11 +80,11 @@ void main() {
       expect(film(19800000000, device(8192, freeMb: 3000)).ringMb, 512);
     });
 
-    test('six minutes, about 1 GB, on a 16 GB desktop', () {
-      expect(film(19800000000, device(16384, freeMb: 8000)).ringMb, 945);
+    test('ten minutes, about 1 GB, on a 16 GB desktop', () {
+      expect(film(19800000000, device(16384, freeMb: 8000)).ringMb, 1024);
     });
 
-    test('unknown size, labelled 1080p, on an 8 GB phone: 180 s at 8', () {
+    test('unknown size, labelled 1080p, on an 8 GB phone: 300 s at 8', () {
       final plan = bufferPlanFor(
         media: BufferMedia.httpFile,
         memory: device(8192, freeMb: 3000),
@@ -94,7 +94,7 @@ void main() {
       );
       expect(plan.bitrateKbps, 8000);
       expect(plan.bitrateFrom, BitrateSource.label);
-      expect(plan.ringMb, 172);
+      expect(plan.ringMb, 287);
     });
   });
 
@@ -195,7 +195,7 @@ void main() {
 
     test('get the target in seconds when the cap holds it', () {
       final plan = hls(device(16384, freeMb: 8000), maxHeight: 1080);
-      expect(plan.adaptiveSeconds, 180);
+      expect(plan.adaptiveSeconds, 300);
       expect(plan.ringMb, isNull);
     });
 
@@ -215,14 +215,14 @@ void main() {
       );
     });
 
-    test('get 60 s on a metered network', () {
+    test('get 120 s on a metered network', () {
       expect(
         hls(
           device(8192, freeMb: 3000),
           maxHeight: 1080,
           metered: true,
         ).adaptiveSeconds,
-        60,
+        120,
       );
     });
   });
@@ -237,10 +237,10 @@ void main() {
         metered: false,
         label: '1080p',
       );
-      // 172 MB wanted, under a cap of 512: the next step up. TorrServer's
+      // 287 MB wanted, under a cap of 512: the next step up. TorrServer's
       // write costs over 2 s and drops every torrent, so values that repeat
       // let most starts skip it.
-      expect((plan.ringMb, plan.torrentCacheMb), (16, 256));
+      expect((plan.ringMb, plan.torrentCacheMb), (16, 512));
     });
 
     test('a step past the cap stops at the cap', () {
@@ -315,11 +315,11 @@ void main() {
     );
     expect(plan.toJson(), {
       'media': 'httpFile',
-      'ringMb': 172,
+      'ringMb': 287,
       'adaptiveSeconds': null,
       'torrentCacheMb': null,
       'capMb': 512,
-      'targetSeconds': 180,
+      'targetSeconds': 300,
       'bitrateKbps': 8000,
       'bitrateFrom': 'label',
     });

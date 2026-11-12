@@ -521,6 +521,15 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// stop since with none asked for is a failure (spec 2, Detection).
   int _pauseRequestsWhenRunning = 0;
 
+  /// Whether the last value processed was playing or buffering: a run is
+  /// already under way. The baseline above is set only on the transition
+  /// into a run, never on every snapshot while running: a pause tap raises
+  /// pauseRequests at once, and a "playing"/"buffering" snapshot still in
+  /// flight after the tap would adopt the raised count and make the paused
+  /// snapshot that follows read as a pause nobody asked for - "Reconnecting..."
+  /// and a reopen that lost the position (v17).
+  bool _wasRunning = false;
+
   /// Set once this attempt's stop nobody asked for has been reported.
   bool _stopReported = false;
 
@@ -1211,16 +1220,21 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
           // media carries its own interval, and its read-ahead from the
           // buffer rule: see playbackMediaOptions.
           networkCaching: kVodCachingMs,
-          // Instance-level read-ahead (256 MiB, was 128 MiB in v4): the
+          // Instance-level read-ahead (512 MiB, was 256 MiB in v6–v16): the
           // prefetch ring libVLC reads ahead of the demuxer, so a
           // double-tap seek has data waiting instead of re-fetching.
-          // 1080p at ~8 Mbit/s is about four minutes of video in 256 MiB,
-          // 4K at ~25 Mbit/s about eighty seconds — comfortably more than
-          // a ±10 s step. A per-media :prefetch-buffer-size from the
-          // buffer plan still overrides this. Costs 256 MiB resident.
-          // (kVodCachingMs stays 10000: it is a latency budget, not a
-          // window — HLS/DASH ignore it, and the repo test pins it.)
-          prefetchBufferKiB: 262144,
+          // 1080p at ~8 Mbit/s is about eight minutes of video in 512
+          // MiB, 4K at ~25 Mbit/s about three minutes — comfortably more
+          // than a ±10 s step, and a wider ring is more likely to cover
+          // the position a 10 s back-seek lands on. A per-media
+          // :prefetch-buffer-size from the buffer plan still overrides
+          // this. Costs 512 MiB resident. (kVodCachingMs stays 10000:
+          // it is a latency budget, not a window — HLS/DASH ignore it,
+          // and the repo test pins it. Ceiling, v17: the ring is
+          // forward-only, so a back-seek past what it holds still
+          // re-fetches briefly; a wider window raises the odds, it does
+          // not promise zero buffering.)
+          prefetchBufferKiB: 524288,
           userAgent: kDefaultBrowserUserAgent,
           // HLS and DASH Auto follow the link: the highest rendition allowed
           // for three segments, then down as the buffer drains and up as it
@@ -4793,10 +4807,20 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         value.state == VlcPlaybackState.error) {
       _ranSinceOpen = false;
     }
-    if (value.state == VlcPlaybackState.playing ||
-        value.state == VlcPlaybackState.buffering) {
-      _ranSinceOpen = true;
+    // The run's baseline is the count when the run starts. A pause tap raises
+    // pauseRequests at once; a "playing"/"buffering" snapshot still in flight
+    // after the tap must not adopt the raised count, or the paused snapshot
+    // that follows reads as a pause nobody asked for. So the baseline moves
+    // only on the transition into a run, and a run already under way leaves
+    // it alone (v17).
+    final isRunning = value.state == VlcPlaybackState.playing ||
+        value.state == VlcPlaybackState.buffering;
+    if (isRunning && !_wasRunning) {
       _pauseRequestsWhenRunning = _controller.pauseRequests;
+    }
+    _wasRunning = isRunning;
+    if (isRunning) {
+      _ranSinceOpen = true;
     } else if (_ranSinceOpen &&
         !_stopReported &&
         _handedToEngine &&

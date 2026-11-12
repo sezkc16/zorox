@@ -81,7 +81,7 @@ void main() {
         (e) => e.kind == QoeEventKind.buffer,
       );
       expect(buffer.fields, containsPair('media', 'httpFile'));
-      expect(buffer.fields, containsPair('ringMb', 172));
+      expect(buffer.fields, containsPair('ringMb', 256));
       expect(buffer.fields, containsPair('capMb', 256));
       expect(buffer.fields, containsPair('totalMb', 4096));
       expect(buffer.fields, containsPair('metered', false));
@@ -129,8 +129,8 @@ void main() {
       expect(buffers.map((b) => b['metered']), [false, true]);
       expect(
         buffers.last['ringMb'],
-        58,
-        reason: '60 s at 8 Mbit/s, on mobile data',
+        115,
+        reason: '120 s at 8 Mbit/s, on mobile data',
       );
 
       await tester.pumpWidget(const SizedBox());

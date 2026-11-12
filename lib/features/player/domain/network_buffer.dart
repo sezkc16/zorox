@@ -157,8 +157,11 @@ class BufferPlan {
 ///
 /// - cap: the device's RAM ÷ 16, between 48 MB and 1 GB, halved when less
 ///   than four times that is free now ([bufferCapMb]);
-/// - target: 60 s on a metered network, otherwise 180 s, or 360 s for a file
-///   averaging 15 Mbit/s or more;
+/// - target: 120 s on a metered network, otherwise 300 s, or 600 s for a
+///   file averaging 15 Mbit/s or more. (v17: was 60/180/360; widened so a
+///   +/-10 s skip and a 10 s back-seek usually land in data already
+///   buffered. The device cap still bounds it, and a backward seek past the
+///   buffered window still re-fetches briefly: prefetch is forward-only.)
 /// - bitrate: [estimateBitrateKbps].
 ///
 /// A file gets target × bitrate, between 16 MiB and the cap; HLS and DASH get
@@ -187,7 +190,14 @@ BufferPlan bufferPlanFor({
     label: label,
     height: height,
   );
-  final targetSeconds = metered ? 60 : (kbps >= 15000 ? 360 : 180);
+  // v17 (2.9.16): the target read-ahead window was widened so a +/-10s skip
+  // and a 10s back-seek are usually served from what is already buffered
+  // instead of re-fetching (and, on a flaky link, re-connecting). The
+  // widening is bounded by the device cap above, so a large target only ever
+  // asks for up to the cap. Backward seeks that leave the buffered window
+  // still re-fetch briefly: libVLC's prefetch is forward-only, so a wider
+  // window raises the odds, it does not promise zero buffering.
+  final targetSeconds = metered ? 120 : (kbps >= 15000 ? 600 : 300);
   final wantMb = _mbFor(targetSeconds, kbps);
   int? ringMb;
   int? adaptiveSeconds;
