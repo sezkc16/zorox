@@ -7,6 +7,83 @@ fullscreen), gold seek bar above it, centre play/pause + ±10 s seek,
 top bar back + title + PiP button. Sheets are Gold & Black bottom
 sheets with a close handle / swipe-down to dismiss.
 
+## v19 bug-fix build (2.9.18+2) — 11 user-reported bugs, all fixed
+
+Version stays 2.9.18, build number bumped to +2 so the IPA is
+distinguishable from the first v19 (2.9.18, no build number).
+
+1. **Double-tap seek no longer turns on 2x.** The tap-and-hold 2x
+   timer (550 ms) fired during a double-tap sequence. Now the
+   double-tap handler stamps the time and cancels the hold timer, and
+   both the tap-down and the timer callback suppress 2x for 800 ms
+   after a double-tap seek.
+2. **Playback freeze — stall watchdog + visible buffering.** The mpv
+   screen had no mid-play stall detection and no recovery, and with the
+   controls hidden there was no buffering indication at all (a stall
+   read as a dead video). Now a watchdog (5 s tick, gated on playing +
+   foreground + not-PiP + not-live) re-seeks after 10 s of no position
+   advance, fails over to the next source, then fails with a message.
+   A gold spinner shows over the video while buffering with the
+   controls hidden.
+3. **No URL on screen in landscape.** The top bar title / sub-line /
+   source list / error text are sanitised: any URL-like title or label
+   is replaced by the episode name, the host, or "Video"; URL tokens
+   are stripped from error text.
+4. **PiP works — button AND auto-PiP.** Two root causes: (a) the PiP
+   button called `startPictureInPicture()` before ANY frame was
+   enqueued, so `isPictureInPicturePossible` was false and the start
+   failed silently (MpvPip now waits for the first enqueued frame, up
+   to 3 s, and fires `onStarted` only from the delegate, not
+   optimistically); (b) the mpv screen had NO lifecycle handler at
+   all — no auto-PiP trigger. Now `didChangeAppLifecycleState` on
+   `hidden` auto-starts PiP (playing + PiP available + not already in
+   PiP) and on `resumed` exits it (VLC parity). The Video widget's
+   `pauseUponEnteringBackgroundMode` was also `true` — it paused the
+   engine the moment the app left, freezing the PiP picture and never
+   resuming it; now `false`.
+5. **Continue Watching.** The Home section already existed, but the
+   mpv screen never wrote watch progress (only a scrobbling tracker).
+   Now a `PlaybackProgressRecorder` is created next to the tracker,
+   fed the same progress samples, and flushed on pause / dispose /
+   background / episode switch — so partially-watched items appear in
+   Continue Watching with a progress bar and resume at the saved
+   position (also works for libVLC history entries).
+6. **Episode rows show a poster.** Each episode row now has a 48x72
+   rounded thumbnail (episode `posterUrl`, falling back to the series
+   poster; `CachedNetworkImage`, lazy/cached, neutral film-icon
+   placeholder on empty/error).
+7. **Toolbar pill inset.** The pill has a 12 dp right margin (matching
+   the approved premium preview) on top of the bar's 12 dp padding,
+   so it is no longer flush in the corner in landscape.
+8. **Top-bar PiP button removed.** PiP lives only in the bottom
+   toolbar pill (+ auto-PiP on Home swipe).
+9. **Premium toolbar.** Frosted-glass gold-tinted gradient pill
+   (backdrop blur), 1 px hairline gold border, layered shadow + gold
+   glow, inset top highlight, larger corner radius (22). Icons are
+   40 px buttons / 21 px icons (30 px / 18 px on a narrow screen, 3 px
+   gaps, 4 px right margin) painted in the shared gold gradient with a
+   subtle drop shadow; PiP-on keeps a small gold dot under its icon.
+   Same 8 icons, same order, Gold & Black only.
+10. **Aspect ratio options.** The fullscreen pill icon no longer just
+    toasts "Already fullscreen" — it opens an Aspect ratio sheet:
+    Fit (default, whole picture), Fill / Zoom (crop to the screen, no
+    bars, via BoxFit.cover), 16:9 and 4:3 (via mpv
+    `video-aspect-override`). Each pick applies at once and toasts the
+    mode.
+11. **Subtitles render — picture subtitles routed to mpv.** The
+    Flutter overlay draws from mpv's `sub-text`, which is EMPTY for
+    picture subtitles (Blu-ray PGS / DVD VobSub — the "Forced" and
+    "SDH" tracks inside most MKVs): there is no text to draw, and mpv
+    rendered nothing either (`sub-visibility=no`), so a selected track
+    showed nothing at all. Now every subtitle selection goes through
+    `_selectSubtitleTrack`: picture tracks (codec in
+    hdmv_pgs_subtitle / pgs / dvd_subtitle / vobsub / dvb_subtitle /
+    xsub) get `sub-visibility=yes` so mpv renders the bitmaps into the
+    video; text tracks keep it `no` (the overlay is the only renderer,
+    and the one the drag and style panel move). Applies to the picker
+    rows and the auto-select alike.
+
+
 ## What v19 adds (all in `lib/features/player/presentation/mpv/mpv_player_screen.dart`)
 
 1. **Pre-play source selection** — `_resolveAndOpen` now passes
@@ -220,9 +297,32 @@ notes. The short version:
 ## Not in v19
 
 - Nav bar redesign (v20, 2.9.19) — not built here.
-- Auto-PiP on Home swipe (manual button only; the context swap gives
-  almost no time on a swipe).
-- Side-car subtitle download, ClearKey DRM, Skip Intro/Outro,
-  auto-advance to the next episode (same limits as v18-mpv).
+- Side-car subtitle download, ClearKey DRM, auto-advance to the next
+  episode (same limits as v18-mpv).
 - The libVLC hand-off fallback for PiP (only if the SW PiP proves
   unworkable — report first, do not implement silently).
+
+## Phone test — the bug-fix build (2.9.18+2)
+
+- Double-tap seek rapidly on both sides: only ±10 s seeks, never 2x.
+- Play a long video: no freeze mid-play; if the source stalls, a
+  spinner shows and it re-seeks / fails over on its own.
+- Landscape: no raw URL anywhere on screen (title line, source line,
+  error text).
+- PiP: tap the toolbar PiP button → real video (not black, not
+  nothing); swipe Home during playback → PiP opens on its own; return
+  to the app → PiP closes and fullscreen returns.
+- Continue Watching: watch part of a video, go back — a Continue
+  Watching row shows it with a progress bar; tapping resumes where
+  you left off.
+- Episodes sheet: each row shows a poster thumbnail on the left.
+- Bottom toolbar: the pill sits inset from the right edge (not in the
+  corner) and looks premium (frosted glass, gold hairline, gold glow,
+  gradient gold icons); no PiP button in the top bar.
+- Aspect ratio: tap the fullscreen/aspect icon → Fit / Fill / Zoom /
+  16:9 / 4:3 sheet; Fill crops out the black bars; 16:9 / 4:3 stretch
+  the picture.
+- Subtitles: pick "Forced" (PGS) on an MKV → the subtitle text/picture
+  appears on the video; pick a text track → the subtitle appears and
+  can be dragged and restyled.
+

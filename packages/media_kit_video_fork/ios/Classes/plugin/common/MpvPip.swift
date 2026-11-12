@@ -44,6 +44,14 @@ final class MpvPip: NSObject, AVPictureInPictureControllerDelegate,
   /// attaches the frame feed, and opens the PiP window. Asynchronous —
   /// [completion] is called on the main thread with whether PiP opened.
   /// Leaves nothing half-built on failure.
+  ///
+  /// The window only opens once the feed has delivered its FIRST frame:
+  /// a sample-buffer layer with no frame yet cannot start PiP
+  /// (`isPictureInPicturePossible` is false), and a window opened before
+  /// the feed lands is black. The SW context renders the next video
+  /// frame within ~1 frame interval of the swap; 3 s is the give-up.
+  /// (This was the v19 button's failure mode: it opened the window the
+  /// instant the feed was attached, with zero frames enqueued.)
   func start(
     handle: Int64,
     duration: Double,
@@ -90,29 +98,73 @@ final class MpvPip: NSObject, AVPictureInPictureControllerDelegate,
         self?.enqueueFrame(pb)
       }
 
-      // 2. The layer MUST be in a visible window with a non-zero frame, or
-      //    PiP is black. It rides on the Flutter view, behind the engine's
-      //    own layers, and is removed when PiP stops.
-      self.layer.frame = CGRect(x: 0, y: 0, width: 160, height: 90)
-      self.layer.videoGravity = .resizeAspect
-      hostView.layer.insertSublayer(self.layer, at: 0)
+      // 2. The first real frame, before anything is shown. See the doc
+      //    comment on [start].
+      self.waitForFirstFrame(timeout: 3.0) { [weak self] gotFrame in
+        guard let self = self else { completion(false); return }
+        if !gotFrame || self.didTeardown {
+          self.teardown()
+          completion(false)
+          return
+        }
 
-      // 3. The PiP window.
-      let source = AVPictureInPictureController.ContentSource(
-        sampleBufferDisplayLayer: self.layer,
-        playbackDelegate: self
-      )
-      let controller = AVPictureInPictureController(contentSource: source)
-      controller.delegate = self
-      self.pip = controller
-      if !(self.pip?.isPictureInPicturePossible ?? false) {
-        self.teardown()
-        completion(false)
-        return
+        // 3. The layer MUST be in a visible window with a non-zero frame,
+        //    or PiP is black. It rides on the Flutter view, behind the
+        //    engine's own layers, and is removed when PiP stops.
+        self.layer.frame = CGRect(x: 0, y: 0, width: 160, height: 90)
+        self.layer.videoGravity = .resizeAspect
+        hostView.layer.insertSublayer(self.layer, at: 0)
+
+        // 4. The PiP window.
+        let source = AVPictureInPictureController.ContentSource(
+          sampleBufferDisplayLayer: self.layer,
+          playbackDelegate: self
+        )
+        let controller = AVPictureInPictureController(contentSource: source)
+        controller.delegate = self
+        self.pip = controller
+        if !(self.pip?.isPictureInPicturePossible ?? false) {
+          self.teardown()
+          completion(false)
+          return
+        }
+        self.pip?.startPictureInPicture()
+        // onStarted fires from the delegate, once the window actually
+        // opened — not here, where it would be optimistic.
+        completion(true)
       }
-      self.pip?.startPictureInPicture()
-      self.onStarted?()
-      completion(true)
+    }
+  }
+
+  /// Polls until the frame feed has delivered its first buffer (or the
+  /// timeout expires), then calls [completion] on the main thread.
+  /// [framesEnqueued] is only ever read here (a stale read costs one
+  /// 50 ms poll, not correctness).
+  private func waitForFirstFrame(
+    timeout: TimeInterval,
+    completion: @escaping (Bool) -> Void
+  ) {
+    let deadline = Date().addingTimeInterval(timeout)
+    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+      while true {
+        guard let self = self else {
+          DispatchQueue.main.async { completion(false) }
+          return
+        }
+        if self.didTeardown {
+          DispatchQueue.main.async { completion(false) }
+          return
+        }
+        if self.framesEnqueued > 0 {
+          DispatchQueue.main.async { completion(true) }
+          return
+        }
+        if Date() > deadline {
+          DispatchQueue.main.async { completion(false) }
+          return
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+      }
     }
   }
 
@@ -295,6 +347,14 @@ final class MpvPip: NSObject, AVPictureInPictureControllerDelegate,
   ) {}
 
   // MARK: - AVPictureInPictureControllerDelegate
+
+  func pictureInPictureControllerDidStartPictureInPicture(
+    _ pictureInPictureController: AVPictureInPictureController
+  ) {
+    // The window actually opened — this, not the start call, is when
+    // Dart may show PiP as active.
+    onStarted?()
+  }
 
   func pictureInPictureControllerDidStopPictureInPicture(
     _ pictureInPictureController: AVPictureInPictureController

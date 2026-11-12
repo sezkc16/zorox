@@ -54,10 +54,11 @@
 ///   * Volume is the engine's gain (`setVolume`), not the system volume the
 ///     VLC screen drives; brightness reuses the same platform channel as the
 ///     VLC screen ([PlatformPlayerBrightness]).
-///   * There is no stall watchdog / auto-reconnect here on purpose: the v17
-///     pause bug was exactly a watchdog reading a pause as a stall. A pause
-///     is a pause; a genuinely dead source is handled by the startup failover
-///     only.
+///   * A mid-play stall watchdog ([_onStallTick]): the v17 lesson was a
+///     watchdog reading a pause as a stall, so this one only runs while
+///     the engine reports playing in the foreground — a pause, a
+///     backgrounded app and PiP never trip it. A stuck position re-seeks,
+///     then fails over to the next source, then shows the failed state.
 ///
 /// The VLC screen stays in the repo untouched; the route points here for this
 /// test build, and flipping it back is a one-line change in `app_router.dart`.
@@ -65,7 +66,9 @@ library;
 
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -104,8 +107,68 @@ const int kMpvBufferSize = 512 * 1024 * 1024;
 /// and the failover moves to the next candidate.
 const Duration _kStartupWatchdog = Duration(seconds: 12);
 
+/// Mid-play stall watchdog: how often to check, and how long the position
+/// must be stuck (while playing) before recovery starts. 5 s checks with a
+/// 10 s stale window means a genuine stall is caught in ~10-15 s, while a
+/// slow network's normal buffering (a few seconds) never trips it.
+const Duration _kStallCheckInterval = Duration(seconds: 5);
+const Duration _kStallBeforeRecover = Duration(seconds: 10);
+
 /// A double-tap seek step.
 const Duration _kSeekStep = Duration(seconds: 10);
+
+/// How long after a double-tap seek the 2x hold is suppressed. A
+/// double-tap is two taps ~100-300 ms apart, and the hold timer is
+/// 550 ms — so 800 ms covers the whole double-tap sequence plus the
+/// timer that any of its tap-downs may already have started.
+const Duration _kDoubleTapHoldSuppress = Duration(milliseconds: 800);
+
+/// Whether [value] looks like a raw URL / stream address rather than a
+/// human-readable title. The top bar shows the item title and the source
+/// label as-is, so a launch whose title (or source name) IS the URL
+/// would put the playing URL on screen.
+bool _looksLikeUrl(String value) {
+  final v = value.trim().toLowerCase();
+  return v.startsWith('http://') ||
+      v.startsWith('https://') ||
+      v.startsWith('magnet:') ||
+      v.startsWith('rtmp://') ||
+      v.startsWith('rtsp://') ||
+      v.startsWith('ftp://') ||
+      v.contains('://');
+}
+
+/// A title safe to show: the human-readable title, never a raw URL. A
+/// URL title falls back to the episode name, then to the URL's host,
+/// then to a plain "Video".
+String _safeTitle(String title, {String? episodeName}) {
+  if (!_looksLikeUrl(title)) return title;
+  final ep = episodeName?.trim() ?? '';
+  if (ep.isNotEmpty && !_looksLikeUrl(ep)) return ep;
+  final host = Uri.tryParse(title.trim())?.host ?? '';
+  if (host.isNotEmpty) return host;
+  return 'Video';
+}
+
+/// A source label safe to show: URL-like parts (a provider returning the
+/// stream URL as the source name) are dropped; if nothing readable is
+/// left, there is no sub-line at all.
+String _safeSourceLabel(String? label) {
+  if (label == null || label.trim().isEmpty) return '';
+  final parts = label
+      .split(' · ')
+      .map((p) => p.trim())
+      .where((p) => p.isNotEmpty && !_looksLikeUrl(p))
+      .toList();
+  return parts.join(' · ');
+}
+
+/// Strips raw URLs out of an error message (exceptions can embed the
+/// stream URL), so the failed screen never shows one either.
+String _stripUrls(String text) {
+  final cleaned = text.replaceAll(RegExp(r'https?://\S+'), '').trim();
+  return cleaned;
+}
 
 /// Pinch-zoom range, same as the VLC screen.
 const double _kMinZoom = 0.5;
@@ -135,6 +198,12 @@ const Offset _kDefaultSubtitlePos = Offset(0.5, 0.92);
 const Offset _kTopSubtitlePos = Offset(0.5, 0.08);
 
 enum _Stage { resolving, playing, failed }
+
+/// The aspect-ratio mode. Fit is the default (the whole picture, bars
+/// where the video and the screen disagree). Fill crops the picture to
+/// the screen (no bars). 16:9 and 4:3 force that display aspect through
+/// mpv (the picture is stretched to it, as in VLC's aspect control).
+enum _AspectMode { fit, fill, ratio16x9, ratio4x3 }
 
 /// Which swipe the HUD is reporting: brightness (left half) or volume
 /// (right half).
@@ -235,6 +304,21 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   PlaybackTracker? _tracker;
   int _sessionToken = 0;
 
+  /// Writes "where was I" for Continue Watching — the same recorder the
+  /// VLC screen uses. The tracker above only scrobbles; without a recorder
+  /// nothing mpv plays ever reaches the watch history, so Home showed no
+  /// Continue Watching row for it. Created next to the tracker, fed the
+  /// same samples, flushed on pause / leave / background.
+  PlaybackProgressRecorder? _recorder;
+
+  /// The last good sample (while playing), so the flush at pause/teardown
+  /// writes the position the engine last reported instead of asking it
+  /// after it has stopped (when it reports 0).
+  ProgressSample? _sample;
+
+  /// A livestream is recorded once, without a position.
+  bool _recordedLivestream = false;
+
   /// Last good state, for the UI and the tracker.
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -283,6 +367,25 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   bool _startedPlaying = false;
   Timer? _watchdogTimer;
 
+  /// Whether the app is in the foreground (see
+  /// [didChangeAppLifecycleState]). The stall watchdog and auto-PiP both
+  /// only run while this is true.
+  bool _foreground = true;
+
+  /// Mid-play stall watchdog. The v17 lesson was a watchdog reading a
+  /// pause as a stall, so this one is gated hard: it only ever runs while
+  /// the engine reports playing, the app is in the foreground, the video
+  /// is not live and PiP is not active. [_lastPositionAdvanceAt] is the
+  /// last tick on which the position actually moved while playing; if it
+  /// goes stale, the picture is frozen and recovery runs (see
+  /// [_onStallTick]): first a re-seek to the current position (re-issues
+  /// the range request and usually un-sticks mpv), then a failover to the
+  /// next source, then the failed state — never a silent frozen frame.
+  Timer? _stallTimer;
+  Duration _lastReportedPosition = Duration.zero;
+  DateTime _lastPositionAdvanceAt = DateTime.now();
+  int _stallRecoveryStep = 0;
+
   bool _controlsVisible = true;
   Timer? _hideTimer;
 
@@ -297,6 +400,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   /// Speed (1.0 = normal).
   double _speed = 1.0;
+
+  /// Aspect-ratio mode (Fit by default). Fill is a Flutter-side crop
+  /// (BoxFit.cover on the Video widget); 16:9 / 4:3 are mpv-side
+  /// (`video-aspect-override`). The mode is per session, not persisted:
+  /// it belongs to the video on screen, not to the app.
+  _AspectMode _aspectMode = _AspectMode.fit;
 
   /// Which swipe HUD is showing (brightness on the left half, volume on
   /// the right), its level (0..1), and whether it is visible. The HUD
@@ -325,6 +434,15 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   // A hold that just ended must not also toggle the controls (the tap
   // up after a long hold still counts as a tap).
   bool _justEndedHoldSpeed = false;
+
+  /// When the last double-tap seek fired. A double-tap is two quick taps
+  /// on the same half, and each tap-down also starts the 2x hold timer —
+  /// so a double-tap seek could engage 2x on its own when the second tap
+  /// lingered or the arena delivered tap-up/cancel late. The hold timer
+  /// is suppressed while a double-tap seek is fresh (see
+  /// [_onTapDownForHoldSpeed] and [_onDoubleTapDown]): a seek is a seek,
+  /// never a hold.
+  DateTime _lastDoubleTapSeekAt = DateTime.fromMicrosecondsSinceEpoch(0);
 
   /// Horizontal scrub: drag left/right to move through the video. The
   /// target is only previewed while dragging; the seek happens on
@@ -372,12 +490,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _hideTimer?.cancel();
     _flashTimer?.cancel();
     _watchdogTimer?.cancel();
+    _stallTimer?.cancel();
     _hudTimer?.cancel();
     _holdSpeedTimer?.cancel();
     _scrubTimer?.cancel();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
+    // Last chance to write the position: leaving the player is what
+    // Continue Watching reads.
+    _flushProgress();
     try {
       _tracker?.finish();
     } catch (_) {
@@ -386,6 +508,59 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     unawaited(_player.dispose());
     _restoreOrientation();
     super.dispose();
+  }
+
+  /// What the screen has to do about the app coming and going.
+  ///
+  /// This is the mpv screen's auto-PiP trigger. v19 shipped a manual
+  /// PiP button only, and leaving the app did nothing at all — no
+  /// window, just background audio. v16 libVLC opened PiP on every Home
+  /// swipe, and that is what the viewer expects here too.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_disposed || !mounted) return;
+    // `inactive` fires for a transient overlay too (Control Center,
+    // Notification Center, a call) — PiP is NOT started there. Leaving
+    // the app for real is `hidden`: the app is backgrounded but the
+    // engine, kept alive by the audio session, still runs, so the
+    // software-context swap has time to complete.
+    _foreground =
+        state != AppLifecycleState.paused &&
+        state != AppLifecycleState.hidden &&
+        state != AppLifecycleState.detached;
+    if (state == AppLifecycleState.hidden) {
+      // Last guaranteed chance to write the position before the app
+      // suspends.
+      _flushProgress();
+      // Auto-PiP on a Home swipe / app switcher: only while actually
+      // playing, and only where PiP exists. A paused film stays paused
+      // in the background.
+      if (defaultTargetPlatform == TargetPlatform.iOS &&
+          _stage == _Stage.playing &&
+          _playing &&
+          _pipAvailable &&
+          !_pipActive) {
+        unawaited(_enterPip(quiet: true));
+      }
+      return;
+    }
+    if (state == AppLifecycleState.paused) {
+      _flushProgress();
+      return;
+    }
+    if (state == AppLifecycleState.resumed) {
+      // However long the app was away is not time the source spent
+      // stalled, and the engine needs a moment to get its position
+      // moving again.
+      _resetStallClock();
+      // Returning to the app dismisses the PiP window and restores the
+      // fullscreen player (as the VLC screen does): a window that opened
+      // while the app was away must not keep floating over the film it
+      // came from.
+      if (_pipActive) {
+        unawaited(_exitPip());
+      }
+    }
   }
 
   void _forceLandscapeIfPortrait() {
@@ -544,8 +719,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         if (playing) {
           _startedPlaying = true;
           _watchdogTimer?.cancel();
+          _resetStallClock();
         } else {
           _tracker?.onPaused();
+          // A pause is a last chance to write the position (the engine
+          // reports 0 once stopped, so the held sample is what counts).
+          _flushProgress();
         }
         _showControlsBriefly();
         setState(() {});
@@ -561,13 +740,32 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         // Feed the tracker, as the VLC screen does: only samples taken while
         // playing count toward history / watched.
         if (_playing && _duration > Duration.zero) {
-          _tracker?.onPlaying(
-            ProgressSample(
-              position: position,
-              duration: _duration,
-              token: _sessionToken,
-            ),
+          final sample = ProgressSample(
+            position: position,
+            duration: _duration,
+            token: _sessionToken,
           );
+          _tracker?.onPlaying(sample);
+          // Continue Watching: the same sample, through the recorder
+          // (rate-limited inside). A livestream is recorded once,
+          // without a position.
+          if (_isLive) {
+            if (!_recordedLivestream) {
+              _recordedLivestream = true;
+              _recorder?.recordLivestream();
+            }
+          } else {
+            if (sample.isWritable) _sample = sample;
+            _recorder?.record(sample, lastStreamUrl: _selected?.url);
+          }
+          // The picture is moving: the stall watchdog's clock resets.
+          // (A tick with the same position is not an advance — see the
+          // watchdog.)
+          if (position != _lastReportedPosition) {
+            _lastReportedPosition = position;
+            _lastPositionAdvanceAt = DateTime.now();
+            _stallRecoveryStep = 0;
+          }
         }
         // Throttle UI rebuilds: the bar only needs ~5 updates a second.
         final now = DateTime.now();
@@ -625,10 +823,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         if (kDebugMode) debugPrint('mpv error: $message');
         // A dead source fails over; an error mid-play just shows in the log
         // — the watchdog owns startup, and a mid-play error is usually a
-        // transient network hiccup mpv recovers from on its own.
+        // transient network hiccup mpv recovers from on its own. If it
+        // does not recover, the picture stops moving and the stall
+        // watchdog (see [_onStallTick]) fails over instead of leaving a
+        // frozen frame.
         if (!_startedPlaying) _tryNextStream();
       }),
     );
+    // The stall watchdog runs for the whole session (it is gated on
+    // playing + foreground, so a pause never trips it).
+    _armStallWatchdog();
   }
 
   Future<void> _resolveAndOpen() async {
@@ -694,6 +898,18 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         videoUrl: _videoUrl,
         token: ++_sessionToken,
       );
+      // The history writer (see [_recorder]): a fresh session gets a
+      // fresh recorder, so a sample from a superseded stream is never
+      // written under this episode's key.
+      _recorder = PlaybackProgressRecorder(
+        read: ref.read,
+        item: widget.item,
+        episode: _episode,
+        videoUrl: _videoUrl,
+        token: _sessionToken,
+      );
+      _sample = null;
+      _recordedLivestream = false;
       await _openStream(_streamIndex, start: _resumePosition);
     } on StreamResolutionException catch (e) {
       if (_disposed) return;
@@ -774,6 +990,20 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       videoUrl: _videoUrl,
       token: _sessionToken,
     );
+    // Same session, same recorder: a failover to another source is
+    // still the same episode, but a fresh _openStream mints a fresh
+    // session token, so the recorder is rebuilt with it (a sample from
+    // the old stream must not be written under the new one).
+    _recorder = PlaybackProgressRecorder(
+      read: ref.read,
+      item: widget.item,
+      episode: _episode,
+      videoUrl: _videoUrl,
+      token: _sessionToken,
+    );
+    _sample = null;
+    _recordedLivestream = false;
+    _resetStallClock();
     try {
       await _player.open(
         Media(
@@ -819,6 +1049,84 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         ? _position
         : Duration.zero;
     unawaited(_openStream(next, start: resumeAt));
+  }
+
+  /// Writes the last good position to the watch history (Continue
+  /// Watching), forced past the recorder's rate limit — this is the last
+  /// chance to write at pause / leave / background.
+  void _flushProgress() {
+    final sample = _sample;
+    final recorder = _recorder;
+    if (sample == null || recorder == null) return;
+    recorder.record(sample, lastStreamUrl: _selected?.url, force: true);
+  }
+
+  /// The stall clock restarts: the position is moving again (or a new
+  /// stream / episode / seek just began), so the watchdog's window opens
+  /// fresh.
+  void _resetStallClock() {
+    _lastPositionAdvanceAt = DateTime.now();
+    _stallRecoveryStep = 0;
+  }
+
+  /// Starts the mid-play stall watchdog. A periodic check (not a single
+  /// timer): a stall has to persist across checks, and every recovery
+  /// step gets its own window to work.
+  void _armStallWatchdog() {
+    _stallTimer?.cancel();
+    _resetStallClock();
+    _stallTimer = Timer.periodic(
+      _kStallCheckInterval,
+      (_) => _onStallTick(),
+    );
+  }
+
+  /// One stall check. Fires only while the engine genuinely reports
+  /// playing in the foreground — a pause, a backgrounded app and PiP are
+  /// all skipped (and the clock resets, so returning never trips it).
+  void _onStallTick() {
+    if (_disposed || !_playing || !_foreground || _pipActive) {
+      _resetStallClock();
+      return;
+    }
+    if (_isLive || _completed || _stage != _Stage.playing) {
+      _resetStallClock();
+      return;
+    }
+    final staleFor = DateTime.now().difference(_lastPositionAdvanceAt);
+    if (staleFor < _kStallBeforeRecover) return;
+
+    // The position has not moved while playing: the picture is frozen.
+    if (_stallRecoveryStep == 0) {
+      // Step 1: a re-seek to the current position. It re-issues the
+      // range request for the chunk mpv is waiting on and usually
+      // un-sticks it without changing sources.
+      _stallRecoveryStep = 1;
+      _lastPositionAdvanceAt = DateTime.now();
+      if (kDebugMode) debugPrint('mpv stall: re-seeking to $_position');
+      unawaited(_seekTo(_position));
+      return;
+    }
+    if (_stallRecoveryStep == 1) {
+      // Step 2: the re-seek did not un-stick it — fail over to the
+      // next source at the same position (a dead / expired / 403ing
+      // source URL is the usual cause).
+      _stallRecoveryStep = 2;
+      _lastPositionAdvanceAt = DateTime.now();
+      if (kDebugMode) debugPrint('mpv stall: failing over to next source');
+      _tryNextStream();
+      return;
+    }
+    // Step 3: even the failover is stuck — say so, instead of leaving a
+    // frozen frame with no way out. The viewer can retry from the
+    // failed screen.
+    _stallTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _stage = _Stage.failed;
+        _error = 'Playback stalled — the source stopped responding.';
+      });
+    }
   }
 
   /// Switches to another episode: per-episode reset, then a fresh resolve
@@ -891,10 +1199,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     if (_disposed) return;
     // Per-episode reset. The tracker and the resume point are rebuilt by
     // _resolveAndOpen; these are the ones nothing else clears.
+    // Write this episode's position first, so switching does not lose it.
+    _flushProgress();
     try {
       _tracker?.finish();
     } catch (_) {}
     _tracker = null;
+    _recorder = null;
+    _sample = null;
+    _recordedLivestream = false;
+    _resetStallClock();
     _forgetSources();
     _pickedBeforeOpen = null;
     _streams = const [];
@@ -982,7 +1296,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     if (external.isNotEmpty) {
       final first = external.first;
       unawaited(
-        _player.setSubtitleTrack(
+        _selectSubtitleTrack(
           SubtitleTrack.uri(first.url, title: first.label),
         ),
       );
@@ -990,8 +1304,56 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       return;
     }
     if (embedded.isNotEmpty) {
-      unawaited(_player.setSubtitleTrack(embedded.first));
+      unawaited(_selectSubtitleTrack(embedded.first));
       _subtitleAppliedFor = _streamIndex;
+    }
+  }
+
+  /// Codecs whose subtitles are PICTURES, not text (Blu-ray PGS, DVD
+  /// VobSub, DVB, XSUB). mpv's `sub-text` — the feed the Flutter overlay
+  /// draws from — is empty for them: there is no text to draw. So a
+  /// picture subtitle can ONLY be shown by mpv rendering it into the
+  /// video itself, never by the overlay.
+  static const _imageSubtitleCodecs = {
+    'hdmv_pgs_subtitle',
+    'pgs',
+    'pgssub',
+    'dvd_subtitle',
+    'dvdsub',
+    'vobsub',
+    'dvb_subtitle',
+    'xsub',
+  };
+
+  /// Whether [track] is a picture subtitle (no text to draw).
+  /// External subtitle files are text by definition (loaded from a URL),
+  /// so a null codec (a track built in Dart, not from mpv's track list)
+  /// counts as text.
+  bool _isImageSubtitle(SubtitleTrack track) {
+    final codec = track.codec?.trim().toLowerCase();
+    return codec != null && _imageSubtitleCodecs.contains(codec);
+  }
+
+  /// Selects a subtitle track and routes it to the renderer that can
+  /// actually show it. Picture subtitles (PGS/VobSub — the "Forced" and
+  /// "SDH" tracks inside most MKVs) get `sub-visibility` ON so mpv
+  /// renders the bitmaps into the video; the Flutter overlay has no text
+  /// for them and would show nothing. Text subtitles keep
+  /// `sub-visibility` OFF — mpv would otherwise burn them in as well and
+  /// double them, and the overlay is the one the drag and the style panel
+  /// move. "Off" turns mpv rendering off too.
+  Future<void> _selectSubtitleTrack(SubtitleTrack track) async {
+    await _player.setSubtitleTrack(track);
+    if (_disposed) return;
+    final image = track.id != 'no' && _isImageSubtitle(track);
+    try {
+      await (_player.platform as NativePlayer).setProperty(
+        'sub-visibility',
+        image ? 'yes' : 'no',
+      );
+    } catch (_) {
+      // A failed property write leaves the previous visibility in place;
+      // the track selection itself already succeeded.
     }
   }
 
@@ -1003,7 +1365,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// position is a fraction of the video area and is persisted, so it
   /// stays put across videos and sessions. It applies to embedded
   /// subtitles and plugin subtitle files alike — both arrive as `sub-text`
-  /// on the same stream.
+  /// on the same stream. Picture subtitles (PGS/VobSub) carry no text, so
+  /// they never reach this overlay; [_selectSubtitleTrack] routes those
+  /// to mpv's own rendering instead (see bug 11).
   ///
   /// The overlay sits inside the pinch-zoom Transform, so it moves and
   /// scales with the picture. Only the text itself is a hit target; a tap
@@ -1172,6 +1536,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   Future<void> _seekTo(Duration target) async {
     if (_duration <= Duration.zero) return;
+    // A seek moves the picture: the watchdog's window opens fresh, so a
+    // seek to a slow spot does not trip it while mpv catches up.
+    _resetStallClock();
     await _player.seek(
       _clampDuration(target, Duration.zero, _duration),
     );
@@ -1188,6 +1555,91 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _speed = speed;
     await _player.setRate(speed);
     if (mounted) setState(() {});
+  }
+
+  // -- aspect ratio --------------------------------------------------------
+
+  /// Applies [_aspectMode] to the video. Fit and Fill are Flutter-side
+  /// (the Video widget's fit, rebuilt in `build`); 16:9 / 4:3 are
+  /// mpv-side: `video-aspect-override` forces the display aspect, and
+  /// Fill returns it to `-1` (auto) so a later 16:9 pick is not fighting
+  /// a leftover override.
+  Future<void> _applyAspectMode() async {
+    final override = switch (_aspectMode) {
+      _AspectMode.ratio16x9 => '16:9',
+      _AspectMode.ratio4x3 => '4:3',
+      _AspectMode.fit || _AspectMode.fill => '-1',
+    };
+    try {
+      await (_player.platform as NativePlayer).setProperty(
+        'video-aspect-override',
+        override,
+      );
+    } catch (_) {
+      // The Flutter-side fit (BoxFit.cover for Fill) still applies; a
+      // failed mpv property only loses the 16:9 / 4:3 stretch.
+    }
+  }
+
+  /// The aspect-ratio sheet, opened from the fullscreen pill icon: Fit
+  /// (default), Fill / Zoom (crop to the screen, no bars), 16:9, 4:3.
+  /// Each pick applies the mode and toasts it. The fullscreen button no
+  /// longer just says "Already fullscreen" — the player is (nearly)
+  /// always fullscreen, and this is the control the viewer actually
+  /// wanted there (bug 10).
+  Future<void> _pickAspectRatio() async {
+    const modes = [
+      (
+        _AspectMode.fit,
+        'Fit',
+        'Whole picture, letterbox bars where it disagrees',
+      ),
+      (
+        _AspectMode.fill,
+        'Fill / Zoom',
+        'Crop to fill the screen, no bars',
+      ),
+      (_AspectMode.ratio16x9, '16:9', 'Force widescreen'),
+      (_AspectMode.ratio4x3, '4:3', 'Force classic'),
+    ];
+    final choice = await _goldSheet<_AspectMode>(
+      (context) => SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.5,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sheetHeader('Aspect ratio'),
+            for (final (mode, label, hint) in modes)
+              ListTile(
+                title: Text(
+                  label,
+                  style: const TextStyle(color: Colors.white),
+                ),
+                subtitle: Text(
+                  hint,
+                  style: const TextStyle(color: Colors.white54),
+                ),
+                trailing: _aspectMode == mode
+                    ? const Icon(Icons.check, color: Color(0xffd4af37))
+                    : null,
+                onTap: () => Navigator.pop(context, mode),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || _disposed) return;
+    setState(() => _aspectMode = choice);
+    await _applyAspectMode();
+    if (!mounted) return;
+    _showToast(
+      'Aspect ratio: ${switch (choice) {
+        _AspectMode.fit => 'Fit',
+        _AspectMode.fill => 'Fill / Zoom',
+        _AspectMode.ratio16x9 => '16:9',
+        _AspectMode.ratio4x3 => '4:3',
+      }}',
+    );
   }
 
   // -- subtitles / audio / source sheets -----------------------------------
@@ -1544,7 +1996,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
             : null,
         onTap: () {
           Navigator.pop(context);
-          unawaited(_player.setSubtitleTrack(SubtitleTrack.no()));
+          unawaited(_selectSubtitleTrack(SubtitleTrack.no()));
           if (mounted) setState(() {});
         },
       ),
@@ -1560,7 +2012,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
           onTap: () {
             Navigator.pop(context);
             unawaited(
-              _player.setSubtitleTrack(
+              _selectSubtitleTrack(
                 SubtitleTrack.uri(sub.url, title: sub.label),
               ),
             );
@@ -1578,7 +2030,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               : null,
           onTap: () {
             Navigator.pop(context);
-            unawaited(_player.setSubtitleTrack(sub));
+            unawaited(_selectSubtitleTrack(sub));
             if (mounted) setState(() {});
           },
         ),
@@ -1640,6 +2092,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _sheetHeader('Episodes'),
       for (final ep in episodes)
         ListTile(
+          leading: _episodeThumbnail(ep),
           title: Text(
             _episodeTitle(l10n, ep),
             style: const TextStyle(color: Colors.white),
@@ -1653,6 +2106,47 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
           },
         ),
     ];
+  }
+
+  /// The episode's poster for the Episodes sheet: the episode's own
+  /// poster (the plugins set it on every episode builder) falling back
+  /// to the series poster. A small rounded thumb, loaded lazily and
+  /// cached (CachedNetworkImage, as the home cards do); a failed load
+  /// shows a neutral dark tile with a film icon — never a broken-image
+  /// icon. The row stays tappable (the thumb is inside the ListTile).
+  Widget _episodeThumbnail(Episode ep) {
+    final url = (ep.posterUrl?.trim().isNotEmpty == true
+            ? ep.posterUrl!
+            : widget.item.posterUrl)
+        .trim();
+    const width = 48.0;
+    const height = 72.0;
+    final placeholder = Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: Colors.white12,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: const Icon(
+        Icons.movie_outlined,
+        color: Colors.white38,
+        size: 22,
+      ),
+    );
+    if (url.isEmpty) return placeholder;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: CachedNetworkImage(
+        imageUrl: url,
+        width: width,
+        height: height,
+        fit: BoxFit.cover,
+        httpHeaders: ep.headers ?? widget.item.headers,
+        placeholder: (_, _) => placeholder,
+        errorWidget: (_, _, _) => placeholder,
+      ),
+    );
   }
 
   /// The Subtitle Style (customize) panel: the appearance rows, each with
@@ -1960,12 +2454,18 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     }
   }
 
-  /// Enters PiP. Manual button only for this build — auto-PiP on a Home
-  /// swipe gives almost no time to swap render contexts.
+  /// Enters PiP: the toolbar button, and auto-PiP on a Home swipe (see
+  /// [didChangeAppLifecycleState]). The background swap has time because
+  /// the audio session keeps the engine running — the `hidden` state is
+  /// where it is triggered, not `inactive` (Control Center).
   ///
   /// If the native side cannot show real video, it throws and the button
   /// stays out of the way: no black PiP is ever shipped.
-  Future<void> _enterPip() async {
+  ///
+  /// [quiet] is the auto-PiP path (Home swipe): a failure there is
+  /// silent — the viewer only went home, and a toast on return would be
+  /// noise. The button path still says so.
+  Future<void> _enterPip({bool quiet = false}) async {
     if (_pipActive || !mounted || _stage != _Stage.playing) return;
     try {
       // GPU-free decode path first: hardware decode, frames copied to
@@ -1981,7 +2481,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       if (mounted) setState(() {});
     } on PlatformException catch (e) {
       if (kDebugMode) debugPrint('mpv pip start failed: $e');
-      _showToast('Picture-in-picture is not available right now');
+      if (!quiet) _showToast('Picture-in-picture is not available right now');
       // Back to the GPU decode path.
       try {
         await (_player.platform as NativePlayer)
@@ -1989,7 +2489,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       } catch (_) {}
     } catch (e) {
       if (kDebugMode) debugPrint('mpv pip start failed: $e');
-      _showToast('Picture-in-picture is not available right now');
+      if (!quiet) _showToast('Picture-in-picture is not available right now');
       try {
         await (_player.platform as NativePlayer)
             .setProperty('hwdec', 'videotoolbox');
@@ -2088,9 +2588,21 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   void _onTapDownForHoldSpeed(TapDownDetails details) {
     final width = MediaQuery.sizeOf(context).width;
     if (details.globalPosition.dx <= width / 2) return;
+    // A double-tap seek just fired: this tap-down is part of it, not a
+    // hold — never start the 2x timer for it.
+    if (DateTime.now().difference(_lastDoubleTapSeekAt) <
+        _kDoubleTapHoldSuppress) {
+      return;
+    }
     _holdSpeedTimer?.cancel();
     _holdSpeedTimer = Timer(const Duration(milliseconds: 550), () {
       if (_disposed || _subtitleDragging || _locked) return;
+      // Re-check: a double-tap that landed after the timer started
+      // (tap-down then double-tap-win) still suppresses the hold.
+      if (DateTime.now().difference(_lastDoubleTapSeekAt) <
+          _kDoubleTapHoldSuppress) {
+        return;
+      }
       _activateHoldSpeed();
     });
   }
@@ -2158,6 +2670,11 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   void _onDoubleTapDown(TapDownDetails details) {
     if (_locked) return;
+    // This is a seek, not a hold: stamp it so the 2x hold timer never
+    // fires for this tap sequence, and kill any timer the tap-down that
+    // just arrived may already have started.
+    _lastDoubleTapSeekAt = DateTime.now();
+    _holdSpeedTimer?.cancel();
     final width = MediaQuery.sizeOf(context).width;
     final x = details.globalPosition.dx;
     if (x < width / 3) {
@@ -2320,6 +2837,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     final bufferedFrac = _canSeek
         ? (_buffered.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
+    // The failed screen's message, with any raw URL stripped out
+    // (exceptions can embed the stream URL).
+    final shownError = _error == null
+        ? null
+        : _stripUrls(_error!).isEmpty
+            ? null
+            : _stripUrls(_error!);
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -2364,12 +2888,23 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                   children: [
                     Video(
                       controller: _videoController,
-                      fit: BoxFit.contain,
+                      // Fill crops the picture to the screen (no bars);
+                      // every other mode shows the whole picture.
+                      fit: _aspectMode == _AspectMode.fill
+                          ? BoxFit.cover
+                          : BoxFit.contain,
                       fill: Colors.black,
                       // Custom controls below; media_kit's own are hidden.
                       controls: (_) => const SizedBox.shrink(),
                       wakelock: true,
-                      pauseUponEnteringBackgroundMode: true,
+                      // NOT paused on background: PiP needs the engine
+                      // still playing when the app leaves (the Video
+                      // widget's own pause would freeze the picture the
+                      // moment the viewer swiped Home, and never resume
+                      // it — its resume flag defaults to off). Background
+                      // audio keeps playing with it, as the VLC screen
+                      // does.
+                      pauseUponEnteringBackgroundMode: false,
                       // media_kit's own subtitle overlay is hidden: the
                       // subtitle is drawn by [_buildDraggableSubtitle]
                       // instead, so the viewer can long-press it and drag
@@ -2461,7 +2996,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        _error ?? l10n.playerNothingToPlay,
+                        shownError ?? l10n.playerNothingToPlay,
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white),
                       ),
@@ -2759,6 +3294,31 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               ),
             ),
 
+          // Buffering, with the controls hidden: the centre transport
+          // already shows an hourglass while the bars are up, but with
+          // them down a stall showed nothing at all — a frozen frame
+          // with no way to tell it was buffering rather than dead.
+          // (When the bars are up, the transport's hourglass covers it.)
+          if (_stage == _Stage.playing &&
+              _buffering &&
+              _playing &&
+              !_completed &&
+              !_locked &&
+              !_controlsVisible)
+            Center(
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.black54,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(16),
+                child: const CircularProgressIndicator(
+                  color: Color(0xffd4af37),
+                  strokeWidth: 3,
+                ),
+              ),
+            ),
+
           // Controls overlay.
           if (_stage == _Stage.playing &&
               _controlsVisible &&
@@ -2800,8 +3360,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               onPip: _togglePip,
               onLock: _toggleLock,
               onRotate: _toggleOrientation,
-              onFullscreen: () =>
-                  _showToast('Already fullscreen'),
+              onFullscreen: _pickAspectRatio,
               onPreviousEpisode: () {
                 final prev = _previousEpisode;
                 if (prev != null) unawaited(_startEpisode(prev));
@@ -2905,10 +3464,15 @@ class _ControlsOverlay extends StatelessWidget {
     final positionFrac = canSeek && duration > Duration.zero
         ? (position.inMilliseconds / duration.inMilliseconds).clamp(0.0, 1.0)
         : 0.0;
+    // Never a raw URL on screen: for some launches the title (or the
+    // source label) IS the stream URL, and the top bar would show it
+    // as-is. The title falls back to the episode name / host; a URL-like
+    // source part is dropped from the sub-line.
+    final safeTitle = _safeTitle(title, episodeName: episodeLine);
     final subLine = [
       ?episodeLine,
-      ?sourceLabel,
-    ].where((line) => line.isNotEmpty).join(' · ');
+      _safeSourceLabel(sourceLabel),
+    ].where((line) => line.isNotEmpty && !_looksLikeUrl(line)).join(' · ');
     // Tap the time to toggle the remaining time ("-23:09"): remaining
     // = total - position, with a "-" prefix. LIVE stays LIVE.
     final timeText = isLive
@@ -2945,7 +3509,7 @@ class _ControlsOverlay extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      title,
+                      safeTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -2986,15 +3550,9 @@ class _ControlsOverlay extends StatelessWidget {
                     ),
                   ),
                 ),
-              if (pipAvailable)
-                IconButton(
-                  onPressed: onPip,
-                  icon: Icon(
-                    Icons.picture_in_picture_alt,
-                    color: pipActive ? gold : Colors.white,
-                  ),
-                  tooltip: 'Picture-in-picture',
-                ),
+              // No PiP button up here: PiP lives only in the bottom
+              // toolbar pill (and auto-PiP on a Home swipe). The top bar
+              // keeps just back, title and the LIVE badge.
             ],
           ),
         ),
@@ -3131,64 +3689,150 @@ class _ControlsOverlay extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  // Right: dark pill of gold icons.
-                  Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xcc1a1a1a),
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _pillIcon(
-                          Icons.tune,
-                          'Settings',
-                          onSettings,
-                          gold,
-                        ),
-                        _pillIcon(
-                          Icons.closed_caption,
-                          'Subtitles',
-                          onSubtitle,
-                          gold,
-                        ),
-                        _pillIcon(
-                          Icons.volume_up,
-                          'Audio',
-                          onAudio,
-                          gold,
-                        ),
-                        _pillIcon(
-                          Icons.speed,
-                          'Speed',
-                          onSpeed,
-                          gold,
-                        ),
-                        _pillIcon(Icons.lock_outline, 'Lock', onLock, gold),
-                        if (pipAvailable)
-                          _pillIcon(
-                            Icons.picture_in_picture_alt,
-                            'Picture-in-picture',
-                            onPip,
-                            gold,
-                            active: pipActive,
+                  // Right: the premium toolbar pill — frosted glass with
+                  // a gold tint, a 1 px gold hairline, a soft gold glow
+                  // underneath, and an inset top highlight. Inset from
+                  // the right edge (not flush in the corner): the bar's
+                  // own 12 dp padding plus a 12 dp margin keep the pill
+                  // clear of the screen's right edge in landscape. On a
+                  // narrow screen it tightens (30 px buttons, 3 px gaps,
+                  // 4 px right margin) so all 8 icons fit.
+                  Builder(
+                    builder: (context) {
+                      // A narrow screen tightens the pill (30 px buttons,
+                      // 3 px gaps, 4 px right margin) so all 8 icons fit.
+                      final compact =
+                          MediaQuery.sizeOf(context).width < 600;
+                      final pillButton = compact ? 30.0 : 40.0;
+                      final pillIconSize = compact ? 18.0 : 21.0;
+                      final pillGap = compact ? 3.0 : 6.0;
+                      final pillInset = compact ? 4.0 : 12.0;
+                      return ClipRRect(
+                        borderRadius: BorderRadius.circular(22),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(
+                            sigmaX: 14,
+                            sigmaY: 14,
                           ),
-                        _pillIcon(
-                          Icons.screen_rotation,
-                          'Rotate',
-                          onRotate,
-                          gold,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(22),
+                              // Gold-tinted frosted glass: a lighter
+                              // gold top (the inset highlight) fading to
+                              // the dark base.
+                              gradient: const LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: [
+                                  Color(0x3dd4af37),
+                                  Color(0x241a1a1a),
+                                  Color(0xcc1a1a1a),
+                                ],
+                              ),
+                              border: Border.all(
+                                color: const Color(
+                                  0xffd4af37,
+                                ).withValues(alpha: 0.28),
+                                width: 1,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(
+                                    alpha: 0.45,
+                                  ),
+                                  blurRadius: 12,
+                                  offset: const Offset(0, 4),
+                                ),
+                                BoxShadow(
+                                  color: const Color(
+                                    0xffd4af37,
+                                  ).withValues(alpha: 0.14),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            margin: EdgeInsets.only(right: pillInset),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 7,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              spacing: pillGap,
+                              children: [
+                                _pillIcon(
+                                  Icons.tune,
+                                  'Settings',
+                                  onSettings,
+                                  gold,
+                                  size: pillButton,
+                                  iconSize: pillIconSize,
+                                ),
+                                _pillIcon(
+                                  Icons.closed_caption,
+                                  'Subtitles',
+                                  onSubtitle,
+                                  gold,
+                                  size: pillButton,
+                                  iconSize: pillIconSize,
+                                ),
+                                _pillIcon(
+                                  Icons.volume_up,
+                                  'Audio',
+                                  onAudio,
+                                  gold,
+                                  size: pillButton,
+                                  iconSize: pillIconSize,
+                                ),
+                                _pillIcon(
+                                  Icons.speed,
+                                  'Speed',
+                                  onSpeed,
+                                  gold,
+                                  size: pillButton,
+                                  iconSize: pillIconSize,
+                                ),
+                                _pillIcon(
+                                  Icons.lock_outline,
+                                  'Lock',
+                                  onLock,
+                                  gold,
+                                  size: pillButton,
+                                  iconSize: pillIconSize,
+                                ),
+                                if (pipAvailable)
+                                  _pillIcon(
+                                    Icons.picture_in_picture_alt,
+                                    'Picture-in-picture',
+                                    onPip,
+                                    gold,
+                                    active: pipActive,
+                                    size: pillButton,
+                                    iconSize: pillIconSize,
+                                  ),
+                                _pillIcon(
+                                  Icons.screen_rotation,
+                                  'Rotate',
+                                  onRotate,
+                                  gold,
+                                  size: pillButton,
+                                  iconSize: pillIconSize,
+                                ),
+                                _pillIcon(
+                                  Icons.fullscreen,
+                                  'Aspect ratio',
+                                  onFullscreen,
+                                  gold,
+                                  size: pillButton,
+                                  iconSize: pillIconSize,
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
-                        _pillIcon(
-                          Icons.fullscreen,
-                          'Fullscreen',
-                          onFullscreen,
-                          gold,
-                        ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                 ],
               ),
@@ -3199,21 +3843,69 @@ class _ControlsOverlay extends StatelessWidget {
     );
   }
 
-  /// One small gold icon in the toolbar pill.
+  /// One icon in the toolbar pill: a 40 px button (30 px on a narrow
+  /// screen) with a 21 px icon painted in the shared gold gradient, and a
+  /// subtle drop shadow under it. Every pill icon is gold; the active
+  /// state (PiP on) keeps the gold and adds a small gold dot under the
+  /// icon, so it reads as on at a glance.
   Widget _pillIcon(
     IconData icon,
     String tooltip,
     VoidCallback onPressed,
     Color gold, {
     bool active = false,
+    double size = 40,
+    double iconSize = 21,
   }) {
-    return IconButton(
-      onPressed: onPressed,
-      icon: Icon(icon, color: active ? gold : Colors.white, size: 20),
-      iconSize: 20,
-      padding: const EdgeInsets.all(6),
-      constraints: const BoxConstraints(),
-      tooltip: tooltip,
+    return SizedBox.square(
+      dimension: size,
+      child: IconButton(
+        onPressed: onPressed,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(),
+        tooltip: tooltip,
+        icon: SizedBox.square(
+          dimension: size,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // The drop shadow: the same icon, dark, 1 px low.
+              Transform.translate(
+                offset: const Offset(0, 1),
+                child: Icon(icon, color: Colors.black54, size: iconSize),
+              ),
+              // The gold-gradient fill.
+              ShaderMask(
+                blendMode: BlendMode.srcIn,
+                shaderCallback: (bounds) {
+                  return const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xfff2dd9a),
+                      Color(0xffd4af37),
+                      Color(0xffa87f1f),
+                    ],
+                  ).createShader(bounds);
+                },
+                child: Icon(icon, color: Colors.white, size: iconSize),
+              ),
+              if (active)
+                Positioned(
+                  bottom: 3,
+                  child: Container(
+                    width: 4,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: gold,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -3274,7 +3966,7 @@ class _PrePlaySourceView extends StatelessWidget {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        title,
+                        _safeTitle(title, episodeName: episodeLine),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
