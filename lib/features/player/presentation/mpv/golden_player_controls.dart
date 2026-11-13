@@ -23,8 +23,11 @@
 ///
 /// Everything is wired to the real engine through the adapter: no
 /// placeholder buttons. No Cast button — mpv/media_kit has no cast in
-/// this app, and a dead one is worse than none. No PiP — mpv renders
-/// through a Metal texture. The drawers (Episodes, Subtitle Style,
+/// this app, and a dead one is worse than none. PiP is Android only:
+/// the activity shrinks into the system's PiP window through the stock
+/// player's channel, so the button is there on Android phones and
+/// tablets; iOS has none, because mpv renders through a Metal texture,
+/// not an AVPlayerLayer. The drawers (Episodes, Subtitle Style,
 /// Audio & Sources) slide in from the right over the video.
 library;
 
@@ -77,6 +80,7 @@ class GoldenPlayerControls extends ConsumerStatefulWidget {
     this.onFitChanged,
     this.videoScale,
     this.onRotate,
+    this.onEnterPip,
     this.isLive = false,
     this.skipSegments = const <SkipSegment>[],
     this.onSkipOutro,
@@ -137,6 +141,11 @@ class GoldenPlayerControls extends ConsumerStatefulWidget {
 
   /// Flips the handset the other way. Non-null on a phone/tablet.
   final VoidCallback? onRotate;
+
+  /// Opens the PiP window. Non-null only where PiP can exist (Android
+  /// phones and tablets — see the screen's `_pipAvailable`); the button
+  /// is never built where this is null.
+  final VoidCallback? onEnterPip;
 
   final bool isLive;
 
@@ -343,6 +352,7 @@ class _GoldenPlayerControlsState
             chromeVisible: chromeVisible,
             isLocked: false,
             doubleTapEnabled: doubleTapEnabled,
+            showPip: settings.showPip,
           );
         }
         return ValueListenableBuilder<bool>(
@@ -352,6 +362,7 @@ class _GoldenPlayerControlsState
             chromeVisible: chromeVisible,
             isLocked: isLocked,
             doubleTapEnabled: doubleTapEnabled,
+            showPip: settings.showPip,
           ),
         );
       },
@@ -363,6 +374,7 @@ class _GoldenPlayerControlsState
     required bool chromeVisible,
     required bool isLocked,
     required bool doubleTapEnabled,
+    required bool showPip,
   }) {
     return Stack(
       fit: StackFit.expand,
@@ -461,6 +473,8 @@ class _GoldenPlayerControlsState
                           onPickSpeed: _pickSpeed,
                           onCycleFit: _cycleFit,
                           onRotate: widget.onRotate,
+                          onEnterPip: widget.onEnterPip,
+                          showPip: showPip,
                         ),
                       ),
                     ),
@@ -767,7 +781,7 @@ class _TwoXIndicator extends StatelessWidget {
   }
 }
 
-/// The top bar: Back, title + lines, subtitle style, Episodes, More.
+/// The top bar: Back, title + lines, subtitle style, PiP, Episodes, More.
 class _TopBar extends StatelessWidget {
   const _TopBar({
     required this.title,
@@ -782,6 +796,8 @@ class _TopBar extends StatelessWidget {
     required this.onPickSpeed,
     required this.onCycleFit,
     required this.onRotate,
+    required this.onEnterPip,
+    required this.showPip,
   });
 
   final String title;
@@ -796,6 +812,12 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onPickSpeed;
   final VoidCallback onCycleFit;
   final VoidCallback? onRotate;
+
+  /// Opens the PiP window; null where PiP cannot exist (see the screen).
+  final VoidCallback? onEnterPip;
+
+  /// Whether the viewer kept the PiP button visible in Settings.
+  final bool showPip;
 
   @override
   Widget build(BuildContext context) {
@@ -870,6 +892,16 @@ class _TopBar extends StatelessWidget {
                 : const SizedBox.shrink(),
           ),
         const SizedBox(width: 8),
+        // PiP (Android only): the screen passes null where PiP cannot
+        // exist, and the setting hides the button where the viewer
+        // switched it off — the same gate as the stock chrome.
+        if (onEnterPip != null && showPip)
+          GoldenIconButton(
+            icon: Icons.picture_in_picture_alt_rounded,
+            onPressed: onEnterPip,
+            tooltip: 'Picture-in-picture',
+          ),
+        if (onEnterPip != null && showPip) const SizedBox(width: 8),
         if (isSeries)
           GoldenIconButton(
             icon: Icons.list_rounded,
