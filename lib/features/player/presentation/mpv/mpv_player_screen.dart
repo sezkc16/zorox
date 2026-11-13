@@ -186,6 +186,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// only calls the view when the padding actually moved.
   EdgeInsets? _lastSubtitlePadding;
 
+  /// The screen height last seen in build. The padding sync runs from a
+  /// post-frame callback and from the chrome listener — outside build —
+  /// so it reads the height from here instead of calling MediaQuery
+  /// (an inherited-widget read) off the build path.
+  double _lastScreenHeight = 0;
+
   /// The pinch zoom's value, owned here and written by the controls'
   /// gesture layer; the Transform over the video reads it.
   final ValueNotifier<double> _videoScale = ValueNotifier<double>(1.0);
@@ -1086,19 +1092,34 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// (post-frame, so a settings change moves the caption) and whenever the
   /// chrome shows or hides. Guarded on the last pushed padding so it is a
   /// no-op when nothing moved.
+  ///
+  /// It never runs while the source list is up ([_Stage.resolving]): no
+  /// caption is visible before the first frame, and the sync — a
+  /// MediaQuery read plus a setState into the video view from outside the
+  /// build — must not run during the resolving window, or the list never
+  /// becomes visible (2.9.17+5 regression). Once the video is playing the
+  /// post-frame callback in build and the chrome listener push it as
+  /// before, so the caption sits low at full size and Position moves it
+  /// live.
   void _syncSubtitlePadding() {
     if (_disposed || !mounted) return;
-    final settings =
-        ref.read(playerSettingsProvider).asData?.value ??
-        const PlayerSettings();
-    final padding = mpvSubtitleViewConfiguration(
-      settings,
-      screenHeight: MediaQuery.sizeOf(context).height,
-      controlsVisible: _chrome.value,
-    ).padding;
-    if (padding == _lastSubtitlePadding) return;
-    _lastSubtitlePadding = padding;
-    _videoKey.currentState?.setSubtitleViewPadding(padding);
+    if (_stage == _Stage.resolving) return;
+    if (_lastScreenHeight <= 0) return;
+    try {
+      final settings =
+          ref.read(playerSettingsProvider).asData?.value ??
+          const PlayerSettings();
+      final padding = mpvSubtitleViewConfiguration(
+        settings,
+        screenHeight: _lastScreenHeight,
+        controlsVisible: _chrome.value,
+      ).padding;
+      if (padding == _lastSubtitlePadding) return;
+      _lastSubtitlePadding = padding;
+      _videoKey.currentState?.setSubtitleViewPadding(padding);
+    } catch (_) {
+      // A subtitle-sync failure must never break the player.
+    }
   }
 
   @override
@@ -1112,13 +1133,19 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     // The subtitle configuration for the video view. The view caches its
     // padding at creation (see _syncSubtitlePadding), so a changed
     // configuration alone does not move the caption — push the new padding
-    // after the frame, only if it moved.
+    // after the frame, only if it moved. The height is cached for the sync
+    // (it runs off the build path), and the callback is only armed once the
+    // video is playing: while the source list is up no caption is visible,
+    // and the sync must not run during the resolving window.
+    final screenHeight = MediaQuery.sizeOf(context).height;
+    _lastScreenHeight = screenHeight;
     final subtitleConfig = mpvSubtitleViewConfiguration(
       settings,
-      screenHeight: MediaQuery.sizeOf(context).height,
+      screenHeight: screenHeight,
       controlsVisible: _chrome.value,
     );
-    if (subtitleConfig.padding != _lastSubtitlePadding) {
+    if (_stage != _Stage.resolving &&
+        subtitleConfig.padding != _lastSubtitlePadding) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _syncSubtitlePadding(),
       );
