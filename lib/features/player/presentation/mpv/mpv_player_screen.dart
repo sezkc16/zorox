@@ -1,19 +1,25 @@
-/// The ORIGINAL SkyStream player UI, on the mpv engine (via media_kit).
+/// The PREMIUM GOLDEN player UI, on the mpv engine (via media_kit).
 ///
-/// The stock chrome — [VlcPlayerControls] (top bar, bottom bar, scrubber,
-/// gestures, lock, skip chip) and the stock options panel ([PlayerPanel]:
-/// Audio, Subtitles, Episodes, Sources) — driven by mpv instead of libVLC,
-/// through [MpvVlcController], an mpv-backed [VlcPlayerController] adapter.
-/// The engine is the v18-mpv one: 512 MiB forward + backward demuxer cache,
-/// VideoToolbox hardware decode, ±10 s seek, pause keeps the position.
+/// The stock chrome ([VlcPlayerControls] + [PlayerPanel]) replaced by the
+/// golden design the user asked for (ChatGPT spec + mockup): black #080808
+/// with champagne gold #D4AF37, dark top/bottom gradients, a thin golden
+/// seekbar, rounded floating buttons, 200–300 ms fades. The engine is the
+/// v18-mpv one: 512 MiB forward + backward demuxer cache, VideoToolbox
+/// hardware decode, ±10 s seek, pause keeps the position.
 ///
-/// What this build carries over the v18-mpv custom overlay:
-///   * the stock top/bottom bars and scrubber, with the stock gestures
-///     (double-tap ±10 s, vertical volume/brightness rails, pinch zoom,
-///     long-press 2x speed boost — all inside the stock controls);
-///   * the stock Options panel with its tabs, the stock Subtitle style page
-///     (including the +5/−5 position nudge), and the episode picker with
-///     posters;
+/// What this build carries over the stock player:
+///   * the golden overlay ([GoldenPlayerControls]): top bar (Back, title,
+///     season/episode, subtitle style, Episodes, More), centre transport
+///     (−10 s, gold play/pause, +10 s), bottom golden seekbar + times and
+///     the utility row (prev/next, CC, volume, speed, lock, aspect,
+///     rotate), single-tap show/hide with a 3 s auto-hide, double-tap
+///     ±10 s, right-side long-press 2x (gold "▶▶ 2x" pill, exact speed
+///     restored on release), pinch zoom, skip-intro/outro chip;
+///   * the golden right-side drawers: Episodes (season selector, real
+///     episode data, gold highlight on the playing row, resume bar),
+///     Subtitle Style (size, colour, font, bold, background, outline,
+///     position + nudge, opacity, encoding, reset — all live on mpv),
+///     Audio & Sources (track and source lists);
 ///   * skip-intro/outro chips, the up-next countdown, and the ended card;
 ///   * subtitles that sit low and at full size: media_kit's SubtitleView
 ///     caches its padding at creation and scales text down on phones, so
@@ -23,15 +29,17 @@
 ///   * Continue Watching resume (a [PlaybackProgressRecorder] fed from the
 ///     same samples as the tracker), the source list in portrait before
 ///     play, Back stopping the audio and returning to portrait, no centre
-///     "+10s"/"−10s" pop-up (the stock seek burst is disabled), and the
-///     pre-play source list with auto-play of the first working source.
+///     "+10s"/"−10s" pop-up, and the pre-play source list with auto-play
+///     of the first working source.
 ///
 /// What it deliberately does NOT carry (mpv limits, reported honestly):
 ///   * PiP — no PiP button; mpv renders through a Metal texture, not an
 ///     AVPlayerLayer (see the v18 header). Audio keeps playing in the
 ///     background (the app declares the `audio` background mode).
-///   * Subtitle/audio delay — media_kit 1.2.6 exposes no delay API, so the
-///     panel's delay steppers are no-ops (they show 0).
+///   * Cast — no cast button; media_kit has no cast in this app.
+///   * Subtitle/audio delay — media_kit 1.2.6 exposes no delay API, so
+///     there is no delay control (the stock panel's steppers were no-ops
+///     showing 0).
 ///   * HLS quality picker — mpv's ABR picks the rendition; no Quality tab.
 ///   * Side-car subtitle download, ClearKey DRM, torrent files.
 library;
@@ -60,15 +68,14 @@ import '../../domain/skip_segments.dart';
 import '../../domain/source_row_status.dart';
 import '../../domain/stream_resolver.dart';
 import '../../domain/subtitle_search_target.dart';
-import '../player_brightness.dart';
 import '../player_platform_service.dart';
 import '../vlc/chrome_visibility_controller.dart';
 import '../vlc/ended_card.dart';
 import '../vlc/next_episode_countdown.dart';
-import '../vlc/panel/player_panel.dart';
+import '../vlc/panel/player_panel_data.dart';
 import '../vlc/panel/player_panel_labels.dart';
 import '../vlc/player_startup_view.dart';
-import '../vlc/vlc_player_controls.dart';
+import 'golden_player_controls.dart';
 import 'mpv_subtitle_style.dart';
 import 'mpv_vlc_controller.dart';
 
@@ -841,35 +848,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     );
   }
 
-  /// Opens the stock options panel on [tab]. The panel reads the adapter
-  /// for its track lists and the screen for its data and callbacks.
-  Future<void> _openPanel(PlayerPanelTab tab) async {
-    if (_disposed || !mounted) return;
-    _chrome.poke(hold: true);
-    try {
-      await showPlayerPanel(
-        context,
-        controller: _adapter,
-        initialTab: tab,
-        data: _panelData,
-        onPickSource: (index) => unawaited(_pickSource(index)),
-        onPickEpisode: (episode) => unawaited(_pickEpisode(episode)),
-        episodeProgress: _episodeProgressFor,
-        onAudioPicked: (track) {
-          // Remembered across failover: the next source re-applies it.
-          _rememberedAudioId = track.id;
-        },
-        subtitleStyle: SubtitleStyleBinding(
-          settings: _playerSettings,
-          notifier: () => ref.read(playerSettingsProvider.notifier),
-        ),
-      );
-    } finally {
-      _chrome.release();
-    }
-  }
-
-  /// How much of [episode] the viewer has already seen, for the panel's
+  /// How much of [episode] the viewer has already seen, for the Episodes
   /// Episodes tab. Asked per row as the list builds it, never precomputed.
   EpisodeProgress _episodeProgressFor(Episode episode) {
     final mainUrl = widget.item.url;
@@ -891,6 +870,23 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       episode: episode.episode,
     );
     return EpisodeProgress(fraction: (position / duration).clamp(0.0, 1.0));
+  }
+
+  /// How long [episode] is, for the Episodes drawer: the history's exact
+  /// seconds first, else the plugin's runtime in minutes.
+  Duration? _episodeDurationFor(Episode episode) {
+    final mainUrl = widget.item.url;
+    final history = ref.read(historyRepositoryProvider);
+    final seconds = history.getEpisodeDuration(
+      episode.url,
+      mainUrl: mainUrl,
+      season: episode.season,
+      episode: episode.episode,
+    );
+    if (seconds > 0) return Duration(seconds: seconds);
+    final runtime = episode.runtime;
+    if (runtime != null && runtime > 0) return Duration(minutes: runtime);
+    return null;
   }
 
   // -- episodes -------------------------------------------------------------
@@ -1015,26 +1011,6 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 
   // -- chrome text ----------------------------------------------------------
-
-  String _chromeTitle(AppLocalizations l10n) {
-    final item = widget.item.title;
-    final episode = _currentEpisode;
-    if (episode == null || !_isEpisodic) return item;
-
-    final parts = <String>[item];
-    // Numbering only where the plugin actually populated it; a great many
-    // hand back zeroes, and `S0 E0` is worse than nothing.
-    if (episode.season > 0 && episode.episode > 0) {
-      parts.add(l10n.playerSeasonEpisode(episode.season, episode.episode));
-    }
-    final name = episode.name.trim();
-    // Dropped when it is the numbering again under another name, which is
-    // what a list with no real episode titles hands back.
-    if (name.isNotEmpty && name != item && !parts.contains(name)) {
-      parts.add(name);
-    }
-    return parts.join(' · ');
-  }
 
   /// What the top bar's subtitle says: the source the picture is coming
   /// from. Null where nothing is playing yet, and the bar then renders no
@@ -1279,13 +1255,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               ),
             ),
 
-          // The stock chrome. Unmounted while the ended card or the up-next
+          // The golden chrome. Unmounted while the ended card or the up-next
           // card is up, so their autofocus and Back handling own the route.
           if (_stage == _Stage.playing &&
               _ended == null &&
               _nextEpisodeOffer == null)
             RepaintBoundary(
-              child: VlcPlayerControls(
+              child: GoldenPlayerControls(
                 controller: _adapter,
                 bufferedFraction: _bufferedFraction,
                 chrome: _chrome,
@@ -1296,27 +1272,39 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                   setState(() => _fit = fit);
                 },
                 onRotate: canRotate ? _flipOrientation : null,
-                title: _chromeTitle(l10n),
+                title: widget.item.title,
+                episodeLine: _episodeLine,
                 subtitle: _chromeSubtitle(),
                 onBack: _goBack,
                 onNextEpisode: _hasNextEpisode ? _advance : null,
                 onPreviousEpisode: _previousEpisode == null
                     ? null
                     : _goToPreviousEpisode,
-                onOpenPanel: _openPanel,
-                panelTabs: _panelData.value.tabs,
+                panelData: _panelData,
+                settings: _playerSettings,
+                settingsNotifier:
+                    ref.read(playerSettingsProvider.notifier),
+                onPickEpisode: (episode) =>
+                    unawaited(_pickEpisode(episode)),
+                onPickSource: (index) => unawaited(_pickSource(index)),
+                onAudioPicked: (track) {
+                  // Remembered across failover: the next source re-applies
+                  // it.
+                  _rememberedAudioId = track.id;
+                },
+                onSubtitlePicked: (id) {
+                  _rememberedSubtitleId = id;
+                },
+                episodeProgress: _episodeProgressFor,
+                episodeDuration: _episodeDurationFor,
                 hasSubtitles: _hasSubtitles,
-                // No PiP on mpv: no button is rendered.
-                onEnterPip: null,
                 isLive: _isLive,
                 skipSegments: _skipSegments,
                 onSkipOutro: _hasNextEpisode ? _offerNextEpisodeNow : null,
-                promptVisible:
-                    _nextEpisodeOffer != null || _ended != null,
-                // Phone and tablet only, and null — not false — anywhere
-                // else: with nothing here the controls have no padlock.
+                // Phone and tablet only: with nothing here the controls
+                // have no padlock.
                 locked: form.isTouch ? _locked : null,
-                brightnessFactory: () => PlatformPlayerBrightness(),
+                lockAvailable: form.isTouch,
               ),
             ),
 
