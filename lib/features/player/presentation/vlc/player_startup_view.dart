@@ -25,27 +25,34 @@ import 'panel/player_panel_labels.dart'
 
 /// One row of the source list: what the reachability check found, and how
 /// playing the source went - two facts, shown in two columns, never merged.
+/// The server the source is on ("FSLv2", "PixelDrain") is a third fact, shown
+/// as a chip: the label truncates it away (it sits at the end of a long
+/// plugin label), and the viewer picks by server. Null where the source
+/// names no server, which leaves the row exactly as it was.
 @immutable
 class StartupRow {
   const StartupRow({
     required this.label,
     required this.reachability,
     this.playState = SourcePlayState.untried,
+    this.server,
   });
 
   final String label;
   final SourceReachability reachability;
   final SourcePlayState playState;
+  final String? server;
 
   @override
   bool operator ==(Object other) =>
       other is StartupRow &&
       other.label == label &&
       other.reachability == reachability &&
-      other.playState == playState;
+      other.playState == playState &&
+      other.server == server;
 
   @override
-  int get hashCode => Object.hash(label, reachability, playState);
+  int get hashCode => Object.hash(label, reachability, playState, server);
 }
 
 class PlayerStartupView extends StatefulWidget {
@@ -690,6 +697,39 @@ class _SourceRow extends StatelessWidget {
                     ),
                   ),
                 ),
+                // The server, as a chip: the label truncates it away (it
+                // sits at the end of a long plugin label), and the viewer
+                // picks by server. Absent where the source names none.
+                if (row.server != null && row.server!.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 110),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: Text(
+                        row.server!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
                 if (compact) ...[
                   const SizedBox(width: 10),
                   SizedBox(

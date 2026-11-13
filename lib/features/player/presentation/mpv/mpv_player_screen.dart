@@ -99,6 +99,21 @@ const Duration _kStartupWatchdog = Duration(seconds: 12);
 /// a floor on visibility, not a forced wait: a tap still opens at once.
 const Duration _kMinListVisible = Duration(milliseconds: 3000);
 
+/// Pre-buffer before the first play: how much must be buffered ahead of
+/// the playhead before the video starts, and the longest the start may be
+/// held for it.
+///
+/// mpv starts on the first frame with only ~1s of readahead by default
+/// (media_kit exposes no `demuxer-readahead-secs` / `cache-pause-initial`
+/// knob — `PlayerConfiguration` only carries the cache SIZE), so the
+/// playhead catches the buffered edge 2–3s in and stalls, then stalls
+/// again when the next segment is slow. Holding the start until 5s are
+/// buffered gives it a cushion. The hold is capped at 4s so a slow source
+/// still starts instead of hanging on a paused first frame — and a fast
+/// source plays at once, since the buffer is usually there already.
+const Duration _kPrebufferTarget = Duration(seconds: 5);
+const Duration _kPrebufferMaxWait = Duration(seconds: 4);
+
 /// Pinch-zoom range, same as the VLC screen.
 const double _kMinZoom = 0.5;
 const double _kMaxZoom = 3.0;
@@ -205,6 +220,18 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// startup watchdog).
   bool _startedPlaying = false;
   Timer? _watchdogTimer;
+
+  /// Pre-buffer state (see _kPrebufferTarget): while true, an opened stream
+  /// is held paused until enough is buffered ahead of the playhead. The
+  /// token invalidates a wait from an earlier source, so a stale timer can
+  /// never play a source the viewer has already left.
+  bool _awaitingPrebuffer = false;
+  Timer? _prebufferTimer;
+  int _prebufferToken = 0;
+
+  /// Where the open source started (its resume point, else zero): the
+  /// pre-buffer cushion is measured from here, not from the stream start.
+  Duration _openStart = Duration.zero;
 
   /// The chrome's auto-hide clock, owned here and lent to the controls.
   late final ChromeVisibilityController _chrome;
@@ -327,6 +354,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
     _watchdogTimer?.cancel();
+    _prebufferTimer?.cancel();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -554,6 +582,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                 1.0,
               )
             : 0.0;
+        // The pre-buffer target is met: start the held stream.
+        if (_awaitingPrebuffer && _prebufferReady) {
+          _startAfterPrebuffer();
+        }
         _publishAdapter();
         setState(() {});
       }),
@@ -738,13 +770,21 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _sample = null;
     _publishPanelData();
     try {
+      // Opened PAUSED: the first frame shows as soon as it is decoded, but
+      // the playhead does not move until _waitForPrebuffer has a cushion
+      // buffered ahead of it (see _kPrebufferTarget). Opening with
+      // play: true started on the first frame with ~1s buffered, so it
+      // stalled 2–3s in, then again — the spinner the viewer reported.
+      _openStart = start != null && start > Duration.zero
+          ? start
+          : Duration.zero;
       await _player.open(
         Media(
           stream.url,
           httpHeaders: stream.headers,
           start: start != null && start > Duration.zero ? start : null,
         ),
-        play: true,
+        play: false,
       );
     } catch (e) {
       if (kDebugMode) debugPrint('mpv open failed: $e');
@@ -754,7 +794,41 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       return;
     }
     _armWatchdog();
+    _waitForPrebuffer();
     if (mounted) setState(() {});
+  }
+
+  /// Holds an opened stream paused until the pre-buffer target is met, then
+  /// plays. A fast source is usually buffered already, so it plays at once;
+  /// a slow one waits at most _kPrebufferMaxWait and then plays anyway (the
+  /// cache-pause will stall it if the server cannot keep up — same as
+  /// before, but now from a cushion rather than from the first frame).
+  void _waitForPrebuffer() {
+    final token = ++_prebufferToken;
+    _awaitingPrebuffer = true;
+    if (_prebufferReady) {
+      _startAfterPrebuffer(token);
+      return;
+    }
+    _prebufferTimer?.cancel();
+    _prebufferTimer = Timer(_kPrebufferMaxWait, () {
+      if (_disposed || token != _prebufferToken) return;
+      _startAfterPrebuffer(token);
+    });
+  }
+
+  /// Whether the buffered cushion ahead of the playhead meets the target.
+  bool get _prebufferReady =>
+      _buffered - _openStart >= _kPrebufferTarget;
+
+  void _startAfterPrebuffer([int? token]) {
+    if (!_awaitingPrebuffer) return;
+    if (token != null && token != _prebufferToken) return;
+    _awaitingPrebuffer = false;
+    _prebufferTimer?.cancel();
+    _prebufferTimer = null;
+    if (_disposed) return;
+    unawaited(_player.play());
   }
 
   void _armWatchdog() {
@@ -1104,6 +1178,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       for (var i = 0; i < _streams.length; i++)
         StartupRow(
           label: _startupRowLabel(_streams[i]),
+          server: sourceServer(_streams[i]),
           reachability: sourceReachabilityOf(
             _streams[i],
             _probes[i],

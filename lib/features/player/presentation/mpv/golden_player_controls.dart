@@ -670,6 +670,7 @@ class _GoldenPlayerControlsState
           controller: widget.controller,
           onClose: _closeDrawer,
           onSubtitlePicked: widget.onSubtitlePicked,
+          subtitleTarget: widget.panelData.value.subtitleTarget,
         );
       case _GoldenDrawerKind.audioSources:
         return GoldenAudioSourcesDrawer(

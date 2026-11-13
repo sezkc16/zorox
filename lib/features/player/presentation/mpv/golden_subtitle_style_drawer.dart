@@ -13,15 +13,19 @@
 /// reset. The gold accent is the active/selected state throughout.
 library;
 
+import 'dart:async';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:vlc_player/vlc_player.dart';
 
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../settings/presentation/widgets/subtitle_appearance_settings.dart';
+import '../../domain/subtitle_search_target.dart';
+import '../vlc/panel/player_subtitle_search_page.dart';
 import 'golden_drawer.dart';
 import 'golden_player_theme.dart';
-import 'mpv_subtitle_style.dart';
 
 /// Gold is a spec colour, not one of the stock offered colours, so it is
 /// added here and written through the same [setSubtitleColor].
@@ -46,6 +50,7 @@ class GoldenSubtitleStyleDrawer extends StatefulWidget {
     required this.controller,
     required this.onClose,
     this.onSubtitlePicked,
+    this.subtitleTarget,
     super.key,
   });
 
@@ -64,6 +69,11 @@ class GoldenSubtitleStyleDrawer extends StatefulWidget {
   /// Remembered across failover by the screen: the track id the viewer
   /// picked, so the next source re-applies it.
   final ValueChanged<int?>? onSubtitlePicked;
+
+  /// What the online search is about (the screen's title/ids/episode).
+  /// Null where the catalogue knows nothing of this media, and then the
+  /// engine's title seeds the search instead.
+  final SubtitleSearchTarget? subtitleTarget;
 
   @override
   State<GoldenSubtitleStyleDrawer> createState() =>
@@ -124,12 +134,53 @@ class _GoldenSubtitleStyleDrawerState
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
             children: <Widget>[
-              _Preview(settings: settings),
-              const SizedBox(height: 8),
-              _TrackRow(
-                tracks: _tracks,
-                activeId: widget.controller.value.activeSubtitleTrackId,
-                onPick: (id) => _pickTrack(id),
+              // The subtitle tracks as rows, like the Audio panel: tap a
+              // row to pick it, Off to turn subtitles off. No preview box,
+              // no dropdown — the selected row shows a filled radio + gold
+              // highlight, so the current track reads at a glance.
+              const GoldenSectionLabel('Subtitle'),
+              _SubtitleTrackTile(
+                label: 'Off',
+                selected:
+                    widget.controller.value.activeSubtitleTrackId == null,
+                onTap: () => _pickTrack(null),
+              ),
+              for (final track in _tracks)
+                _SubtitleTrackTile(
+                  label: track.name,
+                  selected:
+                      track.id ==
+                      widget.controller.value.activeSubtitleTrackId,
+                  onTap: () => _pickTrack(track.id),
+                ),
+              if (_tracks.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text(
+                    'No subtitle tracks on this source.',
+                    style: TextStyle(
+                      color: GoldenPlayerColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              // Re-read the track list from the engine (the manual
+              // fallback when it never reported a change).
+              _ActionRow(
+                icon: Icons.refresh_rounded,
+                label: 'Retry',
+                onTap: _refreshTracks,
+              ),
+              const GoldenSectionLabel('Subtitle options'),
+              _ActionRow(
+                icon: Icons.file_open_outlined,
+                label: 'Load subtitle file',
+                onTap: () => unawaited(_loadFromDevice()),
+              ),
+              _ActionRow(
+                icon: Icons.search_rounded,
+                label: 'Search online',
+                onTap: () => unawaited(_searchOnline(context)),
               ),
               const GoldenSectionLabel('Style'),
               _StepperRow(
@@ -261,6 +312,59 @@ class _GoldenSubtitleStyleDrawerState
     widget.onSubtitlePicked?.call(id);
   }
 
+  /// Puts a subtitle file from the device on screen. The mpv adapter
+  /// hands it to the engine as a side-car and bumps the track revision,
+  /// so the list re-reads and the file shows as a row.
+  Future<void> _loadFromDevice() async {
+    final picked = await FilePicker.pickFile(
+      type: FileType.custom,
+      allowedExtensions: const <String>['srt', 'vtt', 'ass', 'ssa', 'sub'],
+    );
+    final path = picked?.path;
+    if (path == null) return;
+    try {
+      await widget.controller.addSubtitle(Uri.file(path));
+    } on VlcPlayerException catch (_) {
+      // A file the engine will not take. Absorbed like the stock panel:
+      // the list is about to say the track is not there.
+    }
+  }
+
+  /// Opens the online subtitle search as a full-screen page over the
+  /// player. A result it picks goes straight to the engine (no onFile,
+  /// so the page hands the downloaded file to `addSubtitle` itself),
+  /// and closing it returns to this drawer.
+  Future<void> _searchOnline(BuildContext context) async {
+    final given = widget.subtitleTarget;
+    final seed = given ?? await _searchSeed();
+    if (!context.mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => SubtitleSearchPage(
+          controller: widget.controller,
+          target: seed,
+          onDone: () => Navigator.of(context).pop(),
+        ),
+      ),
+    );
+    // A pick lands as a track revision, which the listener re-reads;
+    // a back-out leaves the list as it was.
+    if (mounted) unawaited(_refreshTracks());
+  }
+
+  /// The screen's target when it has one; otherwise the engine's title
+  /// alone, so a local file keeps its filename as the seed.
+  Future<SubtitleSearchTarget?> _searchSeed() async {
+    try {
+      final title = (await widget.controller.getMediaInfo()).title;
+      return SubtitleSearchTarget(title: title ?? '');
+    } catch (_) {
+      // A seed is a convenience; an engine that will not answer is not a
+      // reason to refuse to open the search.
+      return null;
+    }
+  }
+
   String _colorName(int argb) {
     if (argb == _kGoldSubtitleColor) return 'Gold';
     // The stock labels are localised; the golden drawer is English-first
@@ -317,180 +421,10 @@ String subtitleFontLabelOf(SubtitleFont font) => switch (font) {
   SubtitleFont.netflix => 'Netflix',
 };
 
-/// A one-line live preview of the caption style.
-class _Preview extends StatelessWidget {
-  const _Preview({required this.settings});
-
-  final PlayerSettings settings;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
-        border: Border.all(color: GoldenPlayerColors.divider),
-      ),
-      child: Text(
-        'This is how subtitles will look.',
-        textAlign: TextAlign.center,
-        style: mpvSubtitleTextStyle(settings),
-      ),
-    );
-  }
-}
-
-/// The subtitle track picker row: the current track, tap to change it.
-class _TrackRow extends StatelessWidget {
-  const _TrackRow({
-    required this.tracks,
-    required this.activeId,
-    required this.onPick,
-  });
-
-  final List<VlcTrackDescription> tracks;
-  final int? activeId;
-  final ValueChanged<int?> onPick;
-
-  @override
-  Widget build(BuildContext context) {
-    final active = activeId == null
-        ? null
-        : tracks.where((t) => t.id == activeId).firstOrNull;
-    // The current track's name — the adapter already folds the language
-    // into it ('English'), so it is used as-is. "Off" only when no
-    // subtitle is actually selected.
-    final label = active?.name ?? (tracks.isEmpty ? 'None' : 'Off');
-    return InkWell(
-      onTap: () => _showTrackSheet(context),
-      borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-        decoration: BoxDecoration(
-          color: GoldenPlayerColors.surface,
-          borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
-          border: Border.all(color: GoldenPlayerColors.divider),
-        ),
-        child: Row(
-          children: <Widget>[
-            const Icon(
-              Icons.closed_caption_outlined,
-              color: GoldenPlayerColors.gold,
-              size: 20,
-            ),
-            const SizedBox(width: 12),
-            const Text(
-              'Subtitle',
-              style: TextStyle(
-                color: GoldenPlayerColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
-            ),
-            const Spacer(),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: GoldenPlayerColors.goldHighlight,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            const Icon(
-              Icons.keyboard_arrow_down_rounded,
-              color: GoldenPlayerColors.textSecondary,
-              size: 20,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showTrackSheet(BuildContext context) async {
-    // Off pops -1, a track pops its id, a dismiss pops null (no change).
-    final picked = await showModalBottomSheet<int>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) => _TrackSheet(
-        tracks: tracks,
-        activeId: activeId,
-      ),
-    );
-    if (picked == null) return;
-    onPick(picked == -1 ? null : picked);
-  }
-}
-
-class _TrackSheet extends StatelessWidget {
-  const _TrackSheet({required this.tracks, required this.activeId});
-
-  final List<VlcTrackDescription> tracks;
-  final int? activeId;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: GoldenPlayerColors.backgroundSecondary,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(GoldenPlayerRadii.drawer),
-          topRight: Radius.circular(GoldenPlayerRadii.drawer),
-        ),
-        border: Border(
-          top: GoldenPlayerColors.drawerBorder,
-        ),
-      ),
-      child: SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 14, 16, 6),
-              child: Text(
-                'Subtitle track',
-                style: TextStyle(
-                  color: GoldenPlayerColors.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-            Flexible(
-              child: ListView(
-                shrinkWrap: true,
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 16),
-                children: <Widget>[
-                  _TrackTile(
-                    label: 'Off',
-                    selected: activeId == null,
-                    onTap: () => Navigator.of(context).pop(-1),
-                  ),
-                  for (final track in tracks)
-                    _TrackTile(
-                      label: track.name,
-                      selected: track.id == activeId,
-                      onTap: () => Navigator.of(context).pop(track.id),
-                    ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _TrackTile extends StatelessWidget {
-  const _TrackTile({
+/// One subtitle track row, like the Audio panel: a filled radio + gold
+/// highlight on the selected track, tap to pick it.
+class _SubtitleTrackTile extends StatelessWidget {
+  const _SubtitleTrackTile({
     required this.label,
     required this.selected,
     required this.onTap,
@@ -502,23 +436,113 @@ class _TrackTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      onTap: onTap,
-      leading: Icon(
-        selected
-            ? Icons.radio_button_checked_rounded
-            : Icons.radio_button_unchecked_rounded,
-        color: selected
-            ? GoldenPlayerColors.gold
-            : GoldenPlayerColors.textSecondary,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 11,
+            ),
+            decoration: BoxDecoration(
+              color: selected
+                  ? GoldenPlayerColors.gold.withValues(alpha: 0.12)
+                  : GoldenPlayerColors.surface.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
+              border: Border.all(
+                color: selected
+                    ? GoldenPlayerColors.gold
+                    : Colors.transparent,
+                width: 1.5,
+              ),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_unchecked_rounded,
+                  size: 20,
+                  color: selected
+                      ? GoldenPlayerColors.gold
+                      : GoldenPlayerColors.textSecondary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: selected
+                          ? GoldenPlayerColors.goldHighlight
+                          : GoldenPlayerColors.textPrimary,
+                      fontWeight: selected
+                          ? FontWeight.w700
+                          : FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      title: Text(
-        label,
-        style: TextStyle(
-          color: selected
-              ? GoldenPlayerColors.goldHighlight
-              : GoldenPlayerColors.textPrimary,
-          fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+    );
+  }
+}
+
+/// A simple tappable action row (Retry, Load subtitle file, Search
+/// online): gold icon + label, compact like the track rows.
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 11,
+            ),
+            decoration: BoxDecoration(
+              color: GoldenPlayerColors.surface.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
+            ),
+            child: Row(
+              children: <Widget>[
+                Icon(icon, size: 20, color: GoldenPlayerColors.gold),
+                const SizedBox(width: 12),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: GoldenPlayerColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );

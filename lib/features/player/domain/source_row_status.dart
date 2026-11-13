@@ -71,6 +71,32 @@ String sourceRowLabel(StreamResult stream) {
   return provider == null ? stream.source : '$provider · ${stream.source}';
 }
 
+/// The server a source is on ("FSLv2", "FSL", "PixelDrain", "10G"), for the
+/// source list: the viewer picks by server, and the label truncates the
+/// server away — it sits at the end of a long plugin label ("HubCloud Other
+/// Mommy (1080p WEB-DL H26… [FSLv2 Server]"), past where the row's single
+/// line ellipsises. A bracketed "[… Server …]" wins, since that is where
+/// the plugins put it; otherwise the leading host name (PixelDrain,
+/// HubCloud). Null when the source names no server at all.
+String? sourceServer(StreamResult stream) {
+  final source = stream.source.trim();
+  if (source.isEmpty) return null;
+  final bracketed = RegExp(
+    r'\[([^\]]*server[^\]]*)\]',
+    caseSensitive: false,
+  ).allMatches(source).map((m) => m.group(1)!.trim()).toList();
+  if (bracketed.isNotEmpty) {
+    final name = bracketed.last
+        .replaceAll(RegExp(r'server', caseSensitive: false), '')
+        .replaceAll(RegExp(r'[:·•|/-]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (name.isNotEmpty) return name;
+  }
+  final first = source.split(RegExp(r'\s+')).first;
+  return first.isEmpty ? null : first;
+}
+
 /// What is known about reaching [stream]: the [probe] outcome the check
 /// reported, unless [hasPlayed] - it has shown a picture this resolve, which
 /// is stronger evidence than any request about it.
