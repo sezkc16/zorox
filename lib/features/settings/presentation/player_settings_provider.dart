@@ -212,6 +212,13 @@ class PlayerSettings {
   /// (opening + ending, like anime/dramas) with no tap. Default on.
   final bool autoSkip;
 
+  /// Auto Picture-in-Picture (Android only): when the viewer leaves the
+  /// app while a video is playing — Home, or the app switcher — the video
+  /// shrinks into the system's PiP window instead of pausing. Default off:
+  /// a window that pops up unasked is a surprise, and the stock player's
+  /// auto-enter has no switch of its own.
+  final bool pipAutoEnter;
+
   // Subtitle Accounts
   final String osUsername;
   final String osPassword;
@@ -256,6 +263,7 @@ class PlayerSettings {
     this.showPlaybackSpeed = true,
     this.showEpisodes = true,
     this.autoSkip = true,
+    this.pipAutoEnter = false,
     this.osUsername = '',
     this.osPassword = '',
     this.osApiKey = '',
@@ -302,6 +310,7 @@ class PlayerSettings {
     bool? showPlaybackSpeed,
     bool? showEpisodes,
     bool? autoSkip,
+    bool? pipAutoEnter,
     String? osUsername,
     String? osPassword,
     String? osApiKey,
@@ -352,6 +361,7 @@ class PlayerSettings {
       showPlaybackSpeed: showPlaybackSpeed ?? this.showPlaybackSpeed,
       showEpisodes: showEpisodes ?? this.showEpisodes,
       autoSkip: autoSkip ?? this.autoSkip,
+      pipAutoEnter: pipAutoEnter ?? this.pipAutoEnter,
       osUsername: osUsername ?? this.osUsername,
       osPassword: osPassword ?? this.osPassword,
       osApiKey: osApiKey ?? this.osApiKey,
@@ -560,6 +570,12 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
           defaultValue: true,
         ) ??
         true;
+    final pipAutoEnter =
+        storage.getPlayerSetting<bool>(
+          'player_pip_auto_enter',
+          defaultValue: false,
+        ) ??
+        false;
 
     // No defaultValue: an absent key has to stay absent, because null is what
     // Auto is stored as. The old key, player_network_buffer_mb, is never read.
@@ -607,6 +623,7 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       showPlaybackSpeed: showPlaybackSpeed,
       showEpisodes: showEpisodes,
       autoSkip: autoSkip,
+      pipAutoEnter: pipAutoEnter,
       osUsername: osUser,
       osApiKey: osKey,
       subdlEmail: dlEmail,
@@ -778,6 +795,13 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
   Future<void> setAutoSkip(bool val) async {
     await _repository.setPlayerSetting('player_auto_skip', val);
     _update((PlayerSettings c) => c.copyWith(autoSkip: val));
+  }
+
+  /// Whether leaving the app while a video plays shrinks it into the
+  /// system's PiP window (Android only). Default off — see [pipAutoEnter].
+  Future<void> setPipAutoEnter(bool val) async {
+    await _repository.setPlayerSetting('player_pip_auto_enter', val);
+    _update((PlayerSettings c) => c.copyWith(pipAutoEnter: val));
   }
 
   Future<void> setSubtitleSettings(

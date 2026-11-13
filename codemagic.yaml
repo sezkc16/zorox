@@ -70,7 +70,7 @@ workflows:
 
       - name: Build Android APK
         script: |
-          flutter build apk --debug
+          flutter build apk --release --target-platform android-arm64
 
     artifacts:
       - build/app/outputs/flutter-apk/*.apk

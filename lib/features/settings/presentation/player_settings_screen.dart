@@ -160,6 +160,32 @@ class PlayerSettingsScreen extends ConsumerWidget {
                           .read(playerSettingsProvider.notifier)
                           .setAutoSkip(!playerSettings.autoSkip),
                     ),
+                    // Auto Picture-in-Picture (Android only): leaving the
+                    // app while a video plays shrinks it into the system's
+                    // PiP window instead of pausing. Off by default — a
+                    // window that pops up unasked is a surprise. Offered
+                    // only where PiP exists, the same gate as the PiP
+                    // button toggle in the controls dialog.
+                    if (platform == TargetPlatform.android &&
+                        profile?.isTv != true)
+                      SettingsTile(
+                        icon: Icons.picture_in_picture_alt_rounded,
+                        title: 'Auto Picture-in-Picture',
+                        subtitle: playerSettings.pipAutoEnter
+                            ? l10n.enabled
+                            : l10n.disabled,
+                        trailing: Switch(
+                          value: playerSettings.pipAutoEnter,
+                          onChanged: (val) => ref
+                              .read(playerSettingsProvider.notifier)
+                              .setPipAutoEnter(val),
+                        ),
+                        onTap: () => ref
+                            .read(playerSettingsProvider.notifier)
+                            .setPipAutoEnter(
+                              !playerSettings.pipAutoEnter,
+                            ),
+                      ),
                   ],
                   SettingsTile(
                     icon: Icons.av_timer_rounded,
