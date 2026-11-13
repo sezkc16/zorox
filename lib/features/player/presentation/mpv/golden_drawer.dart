@@ -22,6 +22,15 @@ import 'golden_player_theme.dart';
 /// Fades only — it never slides. The controls animate it with a
 /// [FadeTransition] while the panel gets the [SlideTransition]; a scrim
 /// that moved with the panel read as a dark curtain sweeping the video.
+///
+/// It must NOT use [Positioned.fill]: it is a child of the [FadeTransition]
+/// inside the scrim's [AnimatedSwitcher], not a direct child of a [Stack],
+/// and a [Positioned] anywhere else throws "Incorrect use of
+/// ParentDataWidget" on mount — in a release build that aborts every frame
+/// and freezes the whole app the moment a drawer opens, while mpv's audio
+/// keeps playing (v20+2 drawer-open freeze, 2026-11-14). The [Container]
+/// sizes itself to the screen instead: the switcher hands it the screen's
+/// loose constraints, and `double.infinity` fills them.
 class GoldenDrawerScrim extends StatelessWidget {
   const GoldenDrawerScrim({required this.onClose, super.key});
 
@@ -29,11 +38,13 @@ class GoldenDrawerScrim extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onClose,
-        child: Container(color: Colors.black.withValues(alpha: 0.45)),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onClose,
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        color: Colors.black.withValues(alpha: 0.45),
       ),
     );
   }
