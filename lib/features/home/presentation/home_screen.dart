@@ -381,31 +381,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           child: CustomScrollView(
             controller: _scrollController,
             slivers: [
-              // Greeting (preview) — above the hero on mobile.
-              if (!isWidescreen)
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      LayoutConstants.spacingMd,
-                      MediaQuery.of(context).padding.top + kToolbarHeight + 8,
-                      LayoutConstants.spacingMd,
-                      4,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'What do you want to watch today?',
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                fontSize: 21,
-                              ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
               if (data.containsKey('Trending'))
                 SliverToBoxAdapter(
                   child: ExploreCarousel(
@@ -569,14 +544,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'What do you want to watch today?',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w700,
-              fontSize: 21,
-            ),
-          ),
-          const SizedBox(height: 14),
           // Provider card (preview): current provider + "Change".
           Consumer(
             builder: (context, ref, _) {
