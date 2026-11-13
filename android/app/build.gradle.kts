@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.gradle.api.tasks.Copy
 
 plugins {
     id("com.android.application")
@@ -37,8 +38,20 @@ android {
         // are still packaged for every ABI without this — the +14 APK
         // carried armeabi-v7a (66.6 MB) + x86_64 (88.1 MB) of them.
         // This is what actually drops the other two ABIs.
+        //
+        // WHY clear() + add() and not `+=`: the Flutter Gradle plugin
+        // resets abiFilters to all three ABIs in its apply()
+        // (FlutterPlugin.configureAbiWithoutSplits: clear() +
+        // addAll([armeabi-v7a, arm64-v8a, x86_64])), which runs BEFORE
+        // this android {} block — so `abiFilters += "arm64-v8a"` only
+        // ADDED arm64 to the full list and the +6 APK still shipped
+        // all three ABIs. Clearing first replaces the plugin's list.
+        // (gradle.properties disable-abi-filtering=true also tells the
+        // plugin to skip its override entirely; both mechanisms
+        // together make this robust.)
         ndk {
-            abiFilters += "arm64-v8a"
+            abiFilters.clear()
+            abiFilters.add("arm64-v8a")
         }
     }
 
@@ -110,15 +123,47 @@ android {
                 "META-INF/DEPENDENCIES",
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
-                // TorrServer desktop binaries (~103 MB uncompressed, 56.8 MB
-                // in the +14 APK): only the desktop Dart plugin loads them
-                // from the asset bundle (Linux/macOS/Windows). Android runs
-                // TorrServer from the Go AAR and iOS from the xcframework,
-                // so these are dead weight in the APK. Android-only: this
-                // file is the Android app's build script; desktop builds
-                // still bundle them from the package's pubspec assets.
-                "assets/flutter_assets/packages/flutter_torrent_server/assets/torrserver/*",
+                // NOTE: a TorrServer entry used to live here, but
+                // packaging.resources.excludes only excludes JAVA RESOURCES
+                // (META-INF etc.) — NOT Flutter assets under assets/. The
+                // desktop binaries are Flutter assets copied by the
+                // copyFlutterAssetsRelease task, so they need the exclude
+                // on that task + the mergeReleaseAssets safety net below.
             )
+        }
+    }
+
+    // TorrServer desktop binaries (~103 MB uncompressed, ~87 MB in the
+    // +6 APK): only the desktop Dart plugin loads them from the asset
+    // bundle (Linux/macOS/Windows). Android runs TorrServer from the Go
+    // AAR and iOS from the xcframework, so these are dead weight in the
+    // APK. The package declares them as `assets/torrserver/` in its
+    // pubspec (packages/flutter_torrent_server), so they arrive as
+    // Flutter assets at
+    // assets/flutter_assets/packages/flutter_torrent_server/assets/torrserver/
+    // and must be excluded at the Flutter-asset copy step, not via
+    // packaging.resources.excludes (which never matched them — that is
+    // why the +6 APK still carried all six binaries).
+    //
+    // Two independent mechanisms, so a silent failure of one still
+    // leaves the other:
+    // (1) Exclude them from the Flutter plugin's copyFlutterAssetsRelease
+    //     Copy task — they never reach the merged assets. The task's
+    //     source is the Flutter intermediate dir with include
+    //     "flutter_assets/**", so the exclude pattern is relative to
+    //     that dir (verified against FlutterTaskHelper.getAssets).
+    // (2) Safety net: after mergeReleaseAssets, delete the folder from
+    //     the merged assets output if it is there anyway. Uses only
+    //     standard Gradle APIs (layout.buildDirectory); deleteRecursively
+    //     on a missing path is a no-op, so this cannot break the build.
+    tasks.named<Copy>("copyFlutterAssetsRelease") {
+        exclude("flutter_assets/packages/flutter_torrent_server/assets/torrserver/**")
+    }
+    tasks.named("mergeReleaseAssets") {
+        doLast {
+            layout.buildDirectory
+                .dir("intermediates/merged_assets/release/mergeReleaseAssets/out/flutter_assets/packages/flutter_torrent_server/assets/torrserver")
+                .get().asFile.deleteRecursively()
         }
     }
 }
