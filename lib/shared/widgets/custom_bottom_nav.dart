@@ -41,9 +41,24 @@ class CustomBottomNavBar extends StatelessWidget {
     this.impellerSupported = true,
   });
 
+  /// The pill's bottom offset above the system bottom inset. The package
+  /// default is 16; 8 sits the pill a little lower — closer to the bottom
+  /// edge, so it reads as a proper bottom nav instead of floating mid-row
+  /// over the last posters — without touching the pill itself (glass, gold
+  /// active, icons, labels all unchanged). `insets` also sets the pill's
+  /// side margins, so the pill is a little wider too; the package offers
+  /// no separate bottom offset.
+  static const double _kBottomMargin = 8.0;
+
   /// Vertical space the floating nav occupies above the system bottom
-  /// inset — the shell reserves this so content clears the bar.
-  static const double height = LiquidGlassNavBar.contentBottomInset;
+  /// inset — the shell reserves this so content clears the bar. The
+  /// package's [LiquidGlassNavBar.contentBottomInset] (96) is pill 68 +
+  /// bottom margin 16 + 12 breathing buffer; with the margin at
+  /// [_kBottomMargin] the reserve shrinks by the same amount, so the last
+  /// content row stays fully visible above the pill (no content hidden
+  /// behind it).
+  static const double height =
+      LiquidGlassNavBar.contentBottomInset - 16.0 + _kBottomMargin;
 
   /// The pill's offset from the screen bottom (matching 4c-app convention).
   static double bottomInsetFor(BuildContext context) =>
@@ -90,6 +105,8 @@ class CustomBottomNavBar extends StatelessWidget {
       selectedIndex: currentIndex,
       onTap: onTap,
       impellerSupported: impellerSupported,
+      // A little lower than the package default (see [_kBottomMargin]).
+      insets: _kBottomMargin,
       // Gold accent for the selected tab; muted grey otherwise.
       activeColor: colorScheme.primary,
       inactiveColor: Theme.of(context).brightness == Brightness.dark

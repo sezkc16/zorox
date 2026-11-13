@@ -46,6 +46,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -59,6 +60,7 @@ import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/providers/device_info_provider.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/storage/history_repository.dart';
+import '../../../../core/storage/settings_repository.dart';
 import '../../../../l10n/generated/app_localizations.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../skip/data/skip_service.dart';
@@ -265,6 +267,20 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// pick has to be made again.
   int _audioAutoSelectSetId = -1;
   int _audioAutoSelectSetFor = -1;
+
+  /// The audio pick the viewer last made in the Audio drawer, persisted
+  /// across opens (Hive key [_kLastAudioPickKey]) so AUTO still plays it:
+  /// the viewer taps Hindi every time, so on AUTO the next open applies
+  /// Hindi instead of leaving mpv's early pick (Tamil) in place. Loaded
+  /// per open in [_openStream]; written on every drawer tap. The Settings
+  /// language, when set, still wins over it (see [_applyAudioAutoSelect]).
+  /// Cleared by nothing: a pick is only replaced by a newer pick, never
+  /// by an open — a failover that re-opens the same film must not forget
+  /// what the viewer was hearing.
+  RememberedTrack? _lastAudioPick;
+
+  /// Hive key for [_lastAudioPick].
+  static const String _kLastAudioPickKey = 'player_last_audio_track';
 
   /// True once playback has actually started for the open source (used by the
   /// startup watchdog).
@@ -600,6 +616,15 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
             if (_stage == _Stage.resolving) {
               _stage = _Stage.playing;
             }
+            // mpv has settled its pick by now, so re-read the aid the
+            // drawer shows — the tracks-event read can land while mpv is
+            // still on 'auto' — and give the audio auto-select a second
+            // chance in case the first tracks event arrived before the
+            // list was populated. Both are guarded (the read-back is
+            // best-effort, the auto-select is deduped per open), and
+            // neither touches a pick the viewer made.
+            unawaited(_adapter.refreshRealAudioAid());
+            unawaited(_applyAudioAutoSelect());
           }
         } else {
           _tracker?.onPaused();
@@ -842,6 +867,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     // auto, so the pick has to be made again.
     final preferred = _playerSettings.value.preferredAudioLanguage;
     _preferredAudioToPick = preferred.isNotEmpty ? preferred : null;
+    // And the last pick the viewer made, so AUTO applies it on this open
+    // (see [_lastAudioPick]).
+    _lastAudioPick = _readLastAudioPick();
     _audioAutoSelectSetId = -1;
     _audioAutoSelectSetFor = -1;
     _adapter.clearError();
@@ -1082,6 +1110,21 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     }
   }
 
+  /// The persisted last audio pick, or null when there is none — or it is
+  /// unreadable. A corrupted box reads as no pick, and mpv's own default
+  /// stands, which is where the viewer would have been anyway.
+  RememberedTrack? _readLastAudioPick() {
+    try {
+      final stored = ref
+          .read(settingsRepositoryProvider)
+          .getPlayerSetting<String>(_kLastAudioPickKey);
+      if (stored == null || stored.isEmpty) return null;
+      return RememberedTrack.fromJson(jsonDecode(stored));
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Puts the audio the viewer wants on, once the tracks are known.
   ///
   /// mpv picks its audio at loadfile from the tracks it has seen so far —
@@ -1092,23 +1135,38 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// ([_applyRememberedTracks]), and the audio-language setting was never
   /// read here at all.
   ///
-  /// Runs on every tracks event until the pick is set for this open: the
+  /// Runs on every tracks event until the pick is set for this open, and
+  /// once more on first play (the list may have settled by then): the
   /// setting's language first ([findPreferredAudioTrack] — a Hindi DD 5.1
   /// already playing is not moved to a Hindi 2.0 for being listed first),
-  /// else mpv's own default — the track the drawer already shows as
-  /// selected (the adapter resolves `auto` to default-flagged, else
-  /// first). Setting the track mpv already plays is a no-op, so re-running
-  /// while the list settles only corrects the pick; a pick the viewer
-  /// made wins and is never touched. A language not in the list yet
-  /// returns early and retries on the next tracks event — never a delayed
-  /// guess, the list itself is the clock.
+  /// else the last pick the viewer made ([_lastAudioPick] — the viewer
+  /// taps Hindi every time, so AUTO plays Hindi even with no language set
+  /// in Settings), else mpv's own default from the LIVE list. Setting the
+  /// track mpv already plays is a no-op, so re-running while the list
+  /// settles only corrects the pick; a pick the viewer made wins and is
+  /// never touched. A language not in the list yet returns early and
+  /// retries on the next tracks event — never a delayed guess, the list
+  /// itself is the clock.
+  ///
+  /// +5: the +4 version read the AUTO default from the published adapter
+  /// snapshot (`_adapter.value.activeAudioTrackId`), which is STALE when
+  /// the tracks listener runs — the listener fires before the adapter
+  /// publishes, so on the first tracks event it read null and returned
+  /// early, and on a direct file there is no second tracks event to retry
+  /// on. That is why +4 fixed the setting (its branch reads the live
+  /// list) but not AUTO (Tamil played while the drawer showed Hindi). The
+  /// AUTO branch now reads the live list too, and applies the last pick
+  /// before falling back to the live default.
   Future<void> _applyAudioAutoSelect() async {
     if (_disposed || _rememberedAudioId != null) return;
+    // The LIVE track list, not the published snapshot: the tracks
+    // listener runs before the adapter publishes (see above).
+    final tracks = await _adapter.getAudioTracks();
+    if (_disposed || _rememberedAudioId != null) return;
+    if (tracks.isEmpty) return; // Not ready yet: retry on the next tracks event.
     final preferred = _preferredAudioToPick;
     int? targetId;
     if (preferred != null && preferred.isNotEmpty) {
-      final tracks = await _adapter.getAudioTracks();
-      if (_disposed || _rememberedAudioId != null) return;
       final match = findPreferredAudioTrack(
         tracks,
         preferred,
@@ -1117,8 +1175,14 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       if (match == null) return; // Not in the list yet: retry on the next tracks event.
       targetId = match.id;
     } else {
-      // mpv's own default: the track the drawer already shows as selected.
-      targetId = _adapter.value.activeAudioTrackId;
+      // AUTO: the last pick the viewer made first — matched by language
+      // and name, never by list position, so a settled list that moved
+      // still finds it — else mpv's own default from the live list, set
+      // explicitly so the engine plays what the drawer shows.
+      final lastPick = _lastAudioPick;
+      final remembered =
+          lastPick != null ? matchRememberedTrack(tracks, lastPick) : null;
+      targetId = remembered?.id ?? _adapter.liveDefaultAudioTrackId;
       if (targetId == null) return; // No tracks yet.
     }
     if (targetId == _audioAutoSelectSetId &&
@@ -1690,8 +1754,21 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                 onPickSource: (index) => unawaited(_pickSource(index)),
                 onAudioPicked: (track) {
                   // Remembered across failover: the next source re-applies
-                  // it.
+                  // it — and persisted across opens, so AUTO plays it next
+                  // time too (see [_lastAudioPick]).
                   _rememberedAudioId = track.id;
+                  final pick = RememberedTrack.of(track);
+                  _lastAudioPick = pick;
+                  if (pick != null) {
+                    unawaited(
+                      ref
+                          .read(settingsRepositoryProvider)
+                          .setPlayerSetting(
+                            _kLastAudioPickKey,
+                            jsonEncode(pick.toJson()),
+                          ),
+                    );
+                  }
                 },
                 onSubtitlePicked: (id) {
                   _rememberedSubtitleId = id;

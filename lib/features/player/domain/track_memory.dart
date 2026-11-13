@@ -47,6 +47,31 @@ class RememberedTrack {
   /// found again only by its name or its number, which mean nothing on
   /// another copy of the film.
   bool get hasLanguage => _primarySubtag(language) != null;
+
+  /// JSON round-trip for the persisted last pick: the mpv screen stores it
+  /// under `player_last_audio_track` so AUTO still plays it on the next
+  /// open. The id is only the first thing tried; the language and the name
+  /// are what find the track again on another copy of the film.
+  Map<String, Object?> toJson() => <String, Object?>{
+    'id': id,
+    if (language != null) 'language': language,
+    if (name != null) 'name': name,
+  };
+
+  /// The pick a [toJson] map describes, or null when it says nothing
+  /// usable — a corrupted box, or a value an older build wrote.
+  static RememberedTrack? fromJson(Object? json) {
+    if (json is! Map) return null;
+    final id = json['id'];
+    if (id is! int) return null;
+    final language = json['language'];
+    final name = json['name'];
+    return RememberedTrack(
+      id: id,
+      language: language is String ? language : null,
+      name: name is String ? name : null,
+    );
+  }
 }
 
 /// Lowercased primary subtag, or null when the tag says nothing.

@@ -329,6 +329,23 @@ class MpvVlcController implements VlcPlayerController {
     return int.tryParse(current.id);
   }
 
+  /// The audio track mpv would pick on its own, from the LIVE track list:
+  /// the default-flagged track, else the first — the real mpv aid, or null
+  /// when there are no audio tracks yet.
+  ///
+  /// The screen's auto-select uses this on AUTO (no preferred language, no
+  /// last pick) instead of the published [value.activeAudioTrackId], which
+  /// is stale when the tracks listener runs: the listener fires before the
+  /// adapter publishes, and on a direct file there is only one tracks event,
+  /// so a stale read that returns early is never retried — Tamil played
+  /// while the drawer showed Hindi (+4, AUTO only).
+  int? get liveDefaultAudioTrackId {
+    if (_audioTracks.isEmpty) return null;
+    final def = _audioTracks.indexWhere((t) => t.isDefault == true);
+    final track = _audioTracks[def >= 0 ? def : 0];
+    return _trackId(track.id, def >= 0 ? def : 0);
+  }
+
   int? _activeSubtitleId() {
     final current = _player.state.track.subtitle;
     if (current.id == 'no') return null;

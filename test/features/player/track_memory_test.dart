@@ -543,4 +543,94 @@ void main() {
       expect(RememberedTrack.of(null), isNull);
     });
   });
+
+  group('the last pick, persisted across opens', () {
+    // v20+5 (user phone report 2026-11-14): on AUTO, Endgame opened on
+    // Tamil while the drawer showed Hindi. The viewer taps Hindi every
+    // time, so the pick is stored and applied on the next open — matched
+    // by language and name, never by list position, so a settled list
+    // that moved still finds it.
+    test('round-trips through JSON, and garbage reads as no pick', () {
+      const pick = RememberedTrack(
+        id: 7,
+        language: 'hin',
+        name: 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com',
+      );
+
+      final restored = RememberedTrack.fromJson(pick.toJson());
+      expect(restored?.id, 7);
+      expect(restored?.language, 'hin');
+      expect(restored?.name, 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com');
+
+      expect(RememberedTrack.fromJson(null), isNull);
+      expect(RememberedTrack.fromJson('not a map'), isNull);
+      expect(RememberedTrack.fromJson(<String, Object?>{'id': 'seven'}), isNull);
+      expect(RememberedTrack.fromJson(<String, Object?>{}), isNull);
+    });
+
+    test('finds the Endgame Hindi track on the next open, whatever order '
+        'mpv settled in', () {
+      const pick = RememberedTrack(
+        id: 7,
+        language: 'hin',
+        name: 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com',
+      );
+      List<VlcTrackDescription> listed(List<int> aids) =>
+          withTrackLanguages(
+            <VlcTrackDescription>[
+              for (final aid in aids)
+                _t(
+                  aid,
+                  name: switch (aid) {
+                    3 => 'Org Tamil JHS DDP 5.1 192kbps - 4kHdHub.com',
+                    7 => 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com',
+                    2 => 'Org Telugu JHS DDP 5.1 192kbps - 4kHdHub.com',
+                    _ => 'English DDP Atmos 5.1 - 4kHdHub.com',
+                  },
+                ),
+            ],
+            const <VlcMediaTrackInfo>[],
+          );
+
+      // Tamil first (the list as mpv first reports it), Hindi second.
+      expect(matchRememberedTrack(listed(<int>[3, 7, 2]), pick)?.id, 7);
+      // Hindi first (the settled list): the same pick.
+      expect(matchRememberedTrack(listed(<int>[7, 3, 2]), pick)?.id, 7);
+    });
+
+    test('finds it by name alone when the track carries no language tag', () {
+      // What the engine actually reports for a scraped release: no
+      // language field, the language only in the name.
+      const pick = RememberedTrack(
+        id: 7,
+        name: 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com',
+      );
+      final tracks = withTrackLanguages(
+        <VlcTrackDescription>[
+          _t(3, name: 'Org Tamil JHS DDP 5.1 192kbps - 4kHdHub.com'),
+          _t(7, name: 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com'),
+        ],
+        const <VlcMediaTrackInfo>[],
+      );
+
+      expect(matchRememberedTrack(tracks, pick)?.id, 7);
+    });
+
+    test('matches nothing while Hindi has not arrived yet, so the '
+        'auto-select does not lock in Tamil', () {
+      const pick = RememberedTrack(
+        id: 7,
+        language: 'hin',
+        name: 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com',
+      );
+      final partial = withTrackLanguages(
+        <VlcTrackDescription>[
+          _t(3, name: 'Org Tamil JHS DDP 5.1 192kbps - 4kHdHub.com'),
+        ],
+        const <VlcMediaTrackInfo>[],
+      );
+
+      expect(matchRememberedTrack(partial, pick), isNull);
+    });
+  });
 }
