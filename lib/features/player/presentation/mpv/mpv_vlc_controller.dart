@@ -125,6 +125,15 @@ class MpvVlcController implements VlcPlayerController {
   /// the subtitle look changes, so the panel re-reads its lists.
   int _trackRevision = 0;
 
+  /// The aid mpv itself reports as playing, read back from the engine (see
+  /// [refreshRealAudioAid]). media_kit never reads the track-list
+  /// `selected` flag, so when mpv auto-selects, `state.track.audio` stays
+  /// `auto` and [_activeAudioId] can only guess — and the guess is wrong
+  /// while the HLS list is still settling, because mpv locks its pick
+  /// early (Tamil) and the settled list resolves to another track (Hindi).
+  /// Null while no read-back has landed (or it answered 'auto'/'no').
+  int? _realAudioAid;
+
   /// The last error string, published as the value's error.
   String? _errorDescription;
 
@@ -214,10 +223,41 @@ class MpvVlcController implements VlcPlayerController {
 
   /// Notes that the track lists changed (mpv reported new tracks, or the
   /// screen opened a new source). Bumps the revision and republishes, so
-  /// the panel re-reads its lists.
+  /// the panel re-reads its lists. The aid read-back is re-validated too:
+  /// an aid belongs to the media it was read from, so a stale one from the
+  /// previous source must not outlive the new list.
   void noteTracksChanged() {
     _trackRevision++;
+    _realAudioAid = null;
     publish();
+    unawaited(refreshRealAudioAid());
+  }
+
+  /// Reads mpv's `aid` property — the track actually playing — back from
+  /// the engine, so the drawer lights the track mpv is on, not the guess
+  /// [_activeAudioId] makes while the state is `auto`.
+  ///
+  /// Best-effort: a non-numeric answer ('auto'/'no') or any error clears
+  /// the read-back and the guess stands. Called from [noteTracksChanged],
+  /// so it lands as soon as the tracks exist and re-lands as the HLS list
+  /// settles; the drawer repaints when it does (see the [publish]).
+  Future<void> refreshRealAudioAid() async {
+    try {
+      final platform = _player.platform;
+      if (platform is! NativePlayer) return;
+      final aid = int.tryParse(await platform.getProperty('aid'));
+      if (_disposed) return;
+      if (aid != _realAudioAid) {
+        _realAudioAid = aid;
+        publish();
+      }
+    } catch (_) {
+      // Best-effort: the guess in [_activeAudioId] stands.
+      if (!_disposed && _realAudioAid != null) {
+        _realAudioAid = null;
+        publish();
+      }
+    }
   }
 
   /// Notes a playback error, published as the value's error until the next
@@ -267,6 +307,11 @@ class MpvVlcController implements VlcPlayerController {
     final current = _player.state.track.audio;
     if (current.id == 'no') return null;
     if (current.id == 'auto') {
+      // mpv's own word first: the aid read back from the engine (see
+      // [refreshRealAudioAid]). The guess below is only for the window
+      // before that read-back lands.
+      final real = _realAudioAid;
+      if (real != null) return real;
       // mpv auto-selected: it plays the default-flagged audio track,
       // else the first one — the same rule mpv itself uses with no
       // language preference set. The engine never reports which one it

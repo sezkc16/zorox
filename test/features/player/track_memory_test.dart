@@ -142,6 +142,42 @@ void main() {
       expect(findPreferredAudioTrack(tracks, 'hi', activeId: 1)?.id, 1);
     });
 
+    test('finds Hindi on a 4KHub HLS list, whatever order mpv settled in',
+        () {
+      // v20+3 (user phone report 2026-11-14): Endgame on 4KHDHub opened
+      // on Tamil while the drawer showed Hindi. The HLS list arrives
+      // Tamil-first and settles Hindi-first; the pick must be by language
+      // and mpv aid, never by list position.
+      List<VlcTrackDescription> listed(List<int> aids) =>
+          withTrackLanguages(
+            <VlcTrackDescription>[
+              for (final aid in aids)
+                _t(
+                  aid,
+                  name: switch (aid) {
+                    3 => 'Org Tamil JHS DDP 5.1 192kbps - 4kHdHub.com',
+                    7 => 'Org Hindi JHS DDP 5.1 192kbps - 4kHdHub.com',
+                    2 => 'Org Telugu JHS DDP 5.1 192kbps - 4kHdHub.com',
+                    _ => 'English DDP Atmos 5.1 - 4kHdHub.com',
+                  },
+                ),
+            ],
+            const <VlcMediaTrackInfo>[],
+          );
+
+      // Tamil first (the list as mpv first reports it), Hindi second.
+      expect(findPreferredAudioTrack(listed(<int>[3, 7, 2]), 'hin')?.id, 7);
+      expect(findPreferredAudioTrack(listed(<int>[3, 7, 2]), 'tam')?.id, 3);
+      // Hindi first (the settled list): the same pick, by language.
+      expect(findPreferredAudioTrack(listed(<int>[7, 3, 2]), 'hin')?.id, 7);
+      // Already on Hindi: left alone.
+      expect(
+        findPreferredAudioTrack(listed(<int>[7, 3, 2]), 'hin', activeId: 7)
+            ?.id,
+        7,
+      );
+    });
+
     test('is the film\'s own track over a commentary in the same language', () {
       final tracks = named(<String>[
         'Track 1 - [Japanese]',

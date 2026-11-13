@@ -104,10 +104,18 @@ void main() {
       ),
     );
 
+    // Closed at first: no scrim in the tree at all — not even a
+    // transparent one — while the video plays.
+    expect(find.byType(GoldenDrawerScrim), findsNothing);
+
     await tester.tap(find.text('Open drawer'));
     await tester.pumpAndSettle(const Duration(seconds: 5));
     expect(find.text('Sources'), findsOneWidget);
     expect(find.text('FSL 2160p WEB-DL [16.74 GB]'), findsOneWidget);
+    // The scrim is mounted only while a drawer is open (v20+4): it must
+    // not linger in the tree when the drawer is closed, or its full-screen
+    // translucent layer is composited over the video on every frame.
+    expect(find.byType(GoldenDrawerScrim), findsOneWidget);
 
     // The scrim covers the whole screen: a tap on the video side (left,
     // away from the right-side panel) dismisses the drawer. This guards
@@ -115,5 +123,40 @@ void main() {
     await tester.tapAt(const Offset(50, 300));
     await tester.pumpAndSettle(const Duration(seconds: 5));
     expect(find.text('Sources'), findsNothing);
+    expect(find.byType(GoldenDrawerScrim), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('v20 drawer shell: no scrim is mounted with no drawer open',
+      (tester) async {
+    // The closed state is an empty widget, not a transparent scrim: a
+    // full-screen layer — even at opacity 0 — is composited over the 4K
+    // texture on every frame while the video plays.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          backgroundColor: Colors.black,
+          body: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              const Center(child: Text('Video')),
+              AnimatedSwitcher(
+                duration: GoldenPlayerMotion.drawer,
+                switchInCurve: GoldenPlayerMotion.curve,
+                switchOutCurve: GoldenPlayerMotion.curve,
+                transitionBuilder: (child, animation) =>
+                    FadeTransition(opacity: animation, child: child),
+                child: const SizedBox.shrink(
+                  key: ValueKey<String>('scrim-none'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle(const Duration(seconds: 5));
+    expect(find.byType(GoldenDrawerScrim), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

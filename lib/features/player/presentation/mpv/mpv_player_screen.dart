@@ -71,6 +71,7 @@ import '../../domain/skip_segments.dart';
 import '../../domain/source_row_status.dart';
 import '../../domain/stream_resolver.dart';
 import '../../domain/subtitle_search_target.dart';
+import '../../domain/track_memory.dart';
 import '../player_platform_service.dart';
 import '../vlc/chrome_visibility_controller.dart';
 import '../vlc/ended_card.dart';
@@ -246,6 +247,24 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// a failover opens a new source (mpv resets tracks to auto on open).
   int? _rememberedAudioId;
   int? _rememberedSubtitleId;
+
+  /// The audio language the viewer asked for in Settings, as a canonical
+  /// code ('hin', 'tam', …) — or null when the setting is empty. Captured
+  /// per open in [_openStream]: a change in Settings reaches the next
+  /// media, not the one on screen — the same rule the VLC screen uses.
+  /// The mpv screen never read this setting at all, so mpv played its own
+  /// auto pick (Tamil) while the drawer showed the resolved default
+  /// (Hindi); the VLC screen applies it on open.
+  String? _preferredAudioToPick;
+
+  /// The adapter id the audio auto-select last set, and the source it was
+  /// set for — so a tracks event that only re-lists the same tracks does
+  /// not set the same track again, while a list that settles differently
+  /// (Hindi arriving after Tamil) still corrects the pick. Reset on every
+  /// open in [_openStream]: an open resets mpv's tracks to auto, so the
+  /// pick has to be made again.
+  int _audioAutoSelectSetId = -1;
+  int _audioAutoSelectSetFor = -1;
 
   /// True once playback has actually started for the open source (used by the
   /// startup watchdog).
@@ -682,6 +701,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.tracks.listen((_) {
         if (_disposed) return;
         _applyRememberedTracks();
+        unawaited(_applyAudioAutoSelect());
         _applySubtitleAutoSelect();
         _updateHasSubtitles();
         _adapter.noteTracksChanged();
@@ -816,6 +836,14 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _streamIndex = index;
     _startedPlaying = false;
     _subtitleAppliedFor = -1;
+    // The audio-language setting is captured per open (a change in
+    // Settings reaches the next media, not the one on screen), and the
+    // auto-select record resets with it: an open resets mpv's tracks to
+    // auto, so the pick has to be made again.
+    final preferred = _playerSettings.value.preferredAudioLanguage;
+    _preferredAudioToPick = preferred.isNotEmpty ? preferred : null;
+    _audioAutoSelectSetId = -1;
+    _audioAutoSelectSetFor = -1;
     _adapter.clearError();
     final stream = _streams[index];
     // A high-bitrate (4K) open waits for a bigger cushion (see the
@@ -1052,6 +1080,55 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     if (subtitleId != null) {
       unawaited(_adapter.setSubtitleTrack(subtitleId));
     }
+  }
+
+  /// Puts the audio the viewer wants on, once the tracks are known.
+  ///
+  /// mpv picks its audio at loadfile from the tracks it has seen so far —
+  /// for HLS that list is still settling, so it can lock onto a track
+  /// (Tamil) that is not the one the settled list resolves to (Hindi),
+  /// and it never re-selects. Nothing on this screen corrected that: the
+  /// viewer's pick is only re-applied when one was made in this session
+  /// ([_applyRememberedTracks]), and the audio-language setting was never
+  /// read here at all.
+  ///
+  /// Runs on every tracks event until the pick is set for this open: the
+  /// setting's language first ([findPreferredAudioTrack] — a Hindi DD 5.1
+  /// already playing is not moved to a Hindi 2.0 for being listed first),
+  /// else mpv's own default — the track the drawer already shows as
+  /// selected (the adapter resolves `auto` to default-flagged, else
+  /// first). Setting the track mpv already plays is a no-op, so re-running
+  /// while the list settles only corrects the pick; a pick the viewer
+  /// made wins and is never touched. A language not in the list yet
+  /// returns early and retries on the next tracks event — never a delayed
+  /// guess, the list itself is the clock.
+  Future<void> _applyAudioAutoSelect() async {
+    if (_disposed || _rememberedAudioId != null) return;
+    final preferred = _preferredAudioToPick;
+    int? targetId;
+    if (preferred != null && preferred.isNotEmpty) {
+      final tracks = await _adapter.getAudioTracks();
+      if (_disposed || _rememberedAudioId != null) return;
+      final match = findPreferredAudioTrack(
+        tracks,
+        preferred,
+        activeId: _adapter.value.activeAudioTrackId,
+      );
+      if (match == null) return; // Not in the list yet: retry on the next tracks event.
+      targetId = match.id;
+    } else {
+      // mpv's own default: the track the drawer already shows as selected.
+      targetId = _adapter.value.activeAudioTrackId;
+      if (targetId == null) return; // No tracks yet.
+    }
+    if (targetId == _audioAutoSelectSetId &&
+        _audioAutoSelectSetFor == _streamIndex) {
+      return; // Already set for this open.
+    }
+    await _adapter.setAudioTrack(targetId);
+    if (_disposed || _rememberedAudioId != null) return;
+    _audioAutoSelectSetId = targetId;
+    _audioAutoSelectSetFor = _streamIndex;
   }
 
   /// Picks a subtitle without being asked: the plugin's own subtitle file
@@ -1481,7 +1558,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         fit: StackFit.expand,
         children: [
           // Video. The pinch zoom is a Transform over the picture, driven by
-          // the controls' gesture layer through [_videoScale].
+          // the controls' gesture layer through [_videoScale]. The picture
+          // is its own repaint boundary: the chrome above it rebuilds on
+          // every position tick, and without the boundary each of those
+          // rebuilds re-rasterizes the 4K texture layer with it.
           ValueListenableBuilder<double>(
             valueListenable: _videoScale,
             builder: (context, scale, child) => Transform.scale(
@@ -1489,17 +1569,19 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
               alignment: Alignment.center,
               child: child,
             ),
-            child: Center(
-              child: Video(
-                key: _videoKey,
-                controller: _videoController,
-                fit: _boxFitFor(_fit),
-                fill: Colors.black,
-                // The stock controls below; media_kit's own are hidden.
-                controls: (_) => const SizedBox.shrink(),
-                wakelock: true,
-                pauseUponEnteringBackgroundMode: true,
-                subtitleViewConfiguration: subtitleConfig,
+            child: RepaintBoundary(
+              child: Center(
+                child: Video(
+                  key: _videoKey,
+                  controller: _videoController,
+                  fit: _boxFitFor(_fit),
+                  fill: Colors.black,
+                  // The stock controls below; media_kit's own are hidden.
+                  controls: (_) => const SizedBox.shrink(),
+                  wakelock: true,
+                  pauseUponEnteringBackgroundMode: true,
+                  subtitleViewConfiguration: subtitleConfig,
+                ),
               ),
             ),
           ),
