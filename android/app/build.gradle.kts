@@ -30,6 +30,16 @@ android {
         targetSdk = rootProject.extra["projectTargetSdk"] as Int
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // ARM64 only: the APK must stay small. `flutter build apk
+        // --target-platform android-arm64` only strips the Flutter
+        // engine/app .so; plugin .so files (libvlc, libmpv, libgojni...)
+        // are still packaged for every ABI without this — the +14 APK
+        // carried armeabi-v7a (66.6 MB) + x86_64 (88.1 MB) of them.
+        // This is what actually drops the other two ABIs.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     val keystoreProperties = Properties()
@@ -100,6 +110,14 @@ android {
                 "META-INF/DEPENDENCIES",
                 "META-INF/LICENSE*",
                 "META-INF/NOTICE*",
+                // TorrServer desktop binaries (~103 MB uncompressed, 56.8 MB
+                // in the +14 APK): only the desktop Dart plugin loads them
+                // from the asset bundle (Linux/macOS/Windows). Android runs
+                // TorrServer from the Go AAR and iOS from the xcframework,
+                // so these are dead weight in the APK. Android-only: this
+                // file is the Android app's build script; desktop builds
+                // still bundle them from the package's pubspec assets.
+                "assets/flutter_assets/packages/flutter_torrent_server/assets/torrserver/*",
             )
         }
     }
