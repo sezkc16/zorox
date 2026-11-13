@@ -29,6 +29,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 
 import '../../../settings/presentation/player_settings_provider.dart';
+import '../../domain/subtitle_style.dart';
 
 /// The Style tab's size steps: S/M/L/XL, as stock font sizes.
 const Map<String, double> kMpvSubtitleSizes = <String, double>{
@@ -82,6 +83,10 @@ TextStyle mpvSubtitleTextStyle(PlayerSettings settings) {
   return TextStyle(
     height: 1.4,
     fontSize: settings.subtitleSize.clamp(10.0, 80.0),
+    // The Font setting (Default / Netflix / Serif / Monospace): the stock
+    // VLC path applies it at creation, and mpv must too — otherwise the
+    // setting silently does nothing on the mpv caption.
+    fontFamily: subtitleFontFamily(settings.subtitleFont),
     color: text,
     fontWeight: settings.subtitleBold ? FontWeight.bold : FontWeight.w500,
     // Opacity 0 is no box at all, whatever the colour says — null, not a

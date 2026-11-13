@@ -395,16 +395,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Hello, Suresh',
-                          style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
                           'What do you want to watch today?',
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(
@@ -579,15 +569,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Greeting (preview).
-          Text(
-            'Hello, Suresh',
-            style: TextStyle(
-              color: cs.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 2),
           Text(
             'What do you want to watch today?',
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(

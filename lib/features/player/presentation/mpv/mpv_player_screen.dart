@@ -85,6 +85,13 @@ const int kMpvBufferSize = 512 * 1024 * 1024;
 /// and the failover moves to the next candidate.
 const Duration _kStartupWatchdog = Duration(seconds: 12);
 
+/// How long the pre-play source list stays up with its rows painted before
+/// the first source auto-plays. The streams are preloaded, so resolution is
+/// fast and the list would otherwise flash past unseen — the viewer must see
+/// the list (and get a chance to tap a row) before the video starts. This is
+/// a floor on visibility, not a forced wait: a tap still opens at once.
+const Duration _kMinListVisible = Duration(milliseconds: 800);
+
 /// Pinch-zoom range, same as the VLC screen.
 const double _kMinZoom = 0.5;
 const double _kMaxZoom = 3.0;
@@ -602,6 +609,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       // mpv reads the playlist, and _canSeek stays off until then.
       _isLive = widget.item.contentType == MultimediaContentType.livestream;
       _publishPanelData();
+      // The list must be SEEN, not flashed: the streams are preloaded, so
+      // resolution is fast, and until now nothing rebuilt the screen with
+      // the rows — the first rebuild came from _openStream's trailing
+      // setState, by which time the first frame was imminent and the list
+      // was skipped entirely. Rebuild now, wait for the populated list to
+      // paint, then hold it for a beat before the first source auto-plays.
+      if (mounted) setState(() {});
+      await WidgetsBinding.instance.endOfFrame;
+      if (_disposed) return;
+      final listPaintedAt = DateTime.now();
       unawaited(_loadSkipSegments(_currentEpisode));
       _tracker = PlaybackTracker(
         read: ref.read,
@@ -617,6 +634,14 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         videoUrl: _currentVideoUrl,
         token: _sessionToken,
       );
+      final listVisibleFor = DateTime.now().difference(listPaintedAt);
+      if (listVisibleFor < _kMinListVisible) {
+        await Future<void>.delayed(_kMinListVisible - listVisibleFor);
+      }
+      if (_disposed) return;
+      // A row tapped during the hold already opened its source; do not
+      // overrule the viewer's pick with the auto-pick.
+      if (_streamIndex != resolved.index) return;
       await _openStream(_streamIndex, start: _resumePosition);
     } on StreamResolutionException catch (e) {
       if (_disposed) return;
