@@ -82,6 +82,7 @@ import '../vlc/panel/player_panel_data.dart';
 import '../vlc/panel/player_panel_labels.dart';
 import '../vlc/player_startup_view.dart';
 import 'golden_player_controls.dart';
+import 'mpv_android_options.dart';
 import 'mpv_subtitle_style.dart';
 import 'mpv_vlc_controller.dart';
 
@@ -570,9 +571,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     try {
       _videoController = VideoController(
         _player,
-        configuration: const VideoControllerConfiguration(
-          // VideoToolbox hardware decode (4K HEVC/HDR) + Metal rendering.
-          hwdec: 'videotoolbox',
+        configuration: VideoControllerConfiguration(
+          // VideoToolbox is Apple-only: on Android the old hardcoded
+          // 'videotoolbox' made mpv fall back to software decoding, and
+          // 4K HEVC in software is the stutter the viewer reported on
+          // Android (iOS is smooth because VideoToolbox engages there).
+          // Android uses media_kit's default 'auto-safe' (mediacodec).
+          hwdec: mpvHwdecForPlatform(defaultTargetPlatform),
           enableHardwareAcceleration: true,
         ),
       );
@@ -606,6 +611,18 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     );
 
     _listen();
+    // Android-only mpv options (see mpv_android_options.dart): applied
+    // after the VideoController (which owns `hwdec`) exists and before
+    // the first open, so they govern every file this player loads.
+    // Best-effort: a failure leaves media_kit's defaults in place and
+    // the open still goes ahead. iOS is untouched — its path is smooth
+    // as it is.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final platform = _player.platform;
+      if (platform is NativePlayer) {
+        await applyMpvAndroidOptions(platform);
+      }
+    }
     // The mid-playback stall watchdog: a tick every 2s that asks whether
     // the playhead has moved, and recovers the source when it has not
     // (see _onStallTick). It stands down while the screen is gone.
@@ -643,6 +660,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
             // neither touches a pick the viewer made.
             unawaited(_adapter.refreshRealAudioAid());
             unawaited(_applyAudioAutoSelect());
+            // One-time decode diagnostic: what decoder is actually
+            // engaged (see mpv_android_options.dart). Android should
+            // print mediacodec; empty/no means software decode.
+            unawaited(logMpvDecodeInfo(_player));
           }
         } else {
           _tracker?.onPaused();
