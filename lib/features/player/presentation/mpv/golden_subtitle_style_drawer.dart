@@ -21,6 +21,7 @@ import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../settings/presentation/widgets/subtitle_appearance_settings.dart';
 import 'golden_drawer.dart';
 import 'golden_player_theme.dart';
+import 'golden_track_label.dart';
 import 'mpv_subtitle_style.dart';
 
 /// Gold is a spec colour, not one of the stock offered colours, so it is
@@ -90,7 +91,14 @@ class _GoldenSubtitleStyleDrawerState
 
   void _onControllerChanged() {
     final revision = widget.controller.value.trackRevision;
-    if (revision != _trackRevision) _refreshTracks();
+    if (revision != _trackRevision) {
+      _refreshTracks();
+    } else if (mounted) {
+      // The track list is the same but the ACTIVE track changed (a pick, or
+      // the screen's auto-select): repaint so the dropdown shows the
+      // current track instead of the stale "Off".
+      setState(() {});
+    }
   }
 
   Future<void> _refreshTracks() async {
@@ -351,7 +359,11 @@ class _TrackRow extends StatelessWidget {
     final active = activeId == null
         ? null
         : tracks.where((t) => t.id == activeId).firstOrNull;
-    final label = active?.name ?? (tracks.isEmpty ? 'None' : 'Off');
+    // The current track's name, with its language ("English") — "Off"
+    // only when no subtitle is actually selected.
+    final label = active == null
+        ? (tracks.isEmpty ? 'None' : 'Off')
+        : goldenTrackLabel(active.name, active.language);
     return InkWell(
       onTap: () => _showTrackSheet(context),
       borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),

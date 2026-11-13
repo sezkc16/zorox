@@ -241,7 +241,13 @@ class MpvVlcController implements VlcPlayerController {
 
   int? _activeAudioId() {
     final current = _player.state.track.audio;
-    if (current.id == 'auto' || current.id == 'no') return null;
+    if (current.id == 'no') return null;
+    if (current.id == 'auto') {
+      // mpv auto-selected: it plays the first/default audio track, so
+      // that is the one the panel must show as selected — otherwise
+      // nothing reads as selected while the video is playing.
+      return _audioTracks.isEmpty ? null : 0;
+    }
     final index = _audioTracks.indexWhere((t) => t.id == current.id);
     return index < 0 ? null : index;
   }
@@ -528,6 +534,7 @@ class MpvVlcController implements VlcPlayerController {
           id: i,
           name: _trackName(_audioTracks[i].title, 'Audio ${i + 1}'),
           language: _audioTracks[i].language,
+          channels: _audioTracks[i].channelscount,
         ),
     ];
   }

@@ -529,6 +529,9 @@ class _GoldenPlayerControlsState
                                   onOpenSubtitleStyle: () => _openDrawer(
                                     _GoldenDrawerKind.subtitleStyle,
                                   ),
+                                  onOpenAudioSources: () => _openDrawer(
+                                    _GoldenDrawerKind.audioSources,
+                                  ),
                                   onPickVolume: _pickVolume,
                                   speed: value.playbackSpeed,
                                   onPickSpeed: _pickSpeed,
@@ -1015,33 +1018,22 @@ class _CentreTransport extends StatelessWidget {
           onPressed: onRewind,
         ),
         const SizedBox(width: 28),
+        // The play/pause button, the same dark translucent circle as the
+        // ±10 s seek buttons — no gold fill, so it reads as one row.
         SizedBox(
           width: 72,
           height: 72,
           child: Material(
-            color: Colors.transparent,
-            child: Ink(
-              decoration: const BoxDecoration(
-                gradient: GoldenPlayerColors.goldGradient,
-                shape: BoxShape.circle,
-                boxShadow: <BoxShadow>[
-                  BoxShadow(
-                    color: Color(0x66000000),
-                    blurRadius: 16,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: onTogglePlay,
-                child: Icon(
-                  isPlaying
-                      ? Icons.pause_rounded
-                      : Icons.play_arrow_rounded,
-                  size: 36,
-                  color: Colors.black,
-                ),
+            color: Colors.black.withValues(alpha: 0.45),
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onTogglePlay,
+              child: Icon(
+                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                size: 36,
+                color: GoldenPlayerColors.textPrimary,
               ),
             ),
           ),
@@ -1099,6 +1091,7 @@ class _BottomBar extends StatelessWidget {
     required this.onNextEpisode,
     required this.hasSubtitles,
     required this.onOpenSubtitleStyle,
+    required this.onOpenAudioSources,
     required this.onPickVolume,
     required this.speed,
     required this.onPickSpeed,
@@ -1122,6 +1115,7 @@ class _BottomBar extends StatelessWidget {
   final VoidCallback? onNextEpisode;
   final ValueListenable<bool>? hasSubtitles;
   final VoidCallback onOpenSubtitleStyle;
+  final VoidCallback onOpenAudioSources;
   final VoidCallback onPickVolume;
   final double speed;
   final VoidCallback onPickSpeed;
@@ -1210,6 +1204,15 @@ class _BottomBar extends StatelessWidget {
             _SubtitleButton(
               hasSubtitles: hasSubtitles,
               onPressed: onOpenSubtitleStyle,
+            ),
+            const SizedBox(width: 6),
+            // Audio & Sources, straight from the bottom bar — the same
+            // drawer the top-right More menu opens.
+            GoldenIconButton(
+              icon: Icons.audiotrack_rounded,
+              onPressed: onOpenAudioSources,
+              tooltip: 'Audio & Sources',
+              size: 38,
             ),
             const SizedBox(width: 6),
             GoldenIconButton(
@@ -1354,7 +1357,10 @@ class _GoldenSeekBar extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: <Widget>[
-          // Buffered band, under the slider's track.
+          // Buffered band, under the slider's track. White at 0.5, a
+          // touch taller than the 4 px track, so how far ahead the video
+          // has buffered reads at a glance against the 0.18 track — the
+          // old 0.25 was nearly the same grey as the track itself.
           if (buffered != null)
             ValueListenableBuilder<double>(
               valueListenable: buffered,
@@ -1364,10 +1370,10 @@ class _GoldenSeekBar extends StatelessWidget {
                   child: FractionallySizedBox(
                     widthFactor: fraction.clamp(0.0, 1.0),
                     child: Container(
-                      height: 4,
+                      height: 5,
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.25),
-                        borderRadius: BorderRadius.circular(2),
+                        color: Colors.white.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(2.5),
                       ),
                     ),
                   ),

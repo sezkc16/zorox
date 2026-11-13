@@ -10,6 +10,7 @@ class VlcTrackDescription {
     required this.id,
     required this.name,
     this.language,
+    this.channels,
   });
 
   /// Creates a track description from a native platform map.
@@ -18,6 +19,7 @@ class VlcTrackDescription {
       id: _intValue(map['id']) ?? -1,
       name: _stringValue(map['name']) ?? '',
       language: _stringValue(map['language']),
+      channels: _intValue(map['channels']),
     );
   }
 
@@ -30,16 +32,22 @@ class VlcTrackDescription {
   /// Optional ISO language code or language label reported by VLC.
   final String? language;
 
+  /// Optional channel count (6 = 5.1, 2 = Stereo). The mpv adapter fills
+  /// it from media_kit's track info; the libVLC backend leaves it null
+  /// (its channels live on VlcMediaTrackInfo instead).
+  final int? channels;
+
   @override
   bool operator ==(Object other) {
     return other is VlcTrackDescription &&
         other.id == id &&
         other.name == name &&
-        other.language == language;
+        other.language == language &&
+        other.channels == channels;
   }
 
   @override
-  int get hashCode => Object.hash(id, name, language);
+  int get hashCode => Object.hash(id, name, language, channels);
 }
 
 /// Metadata and discovered track information for the current media.

@@ -18,6 +18,7 @@ import '../../domain/source_row_status.dart';
 import '../vlc/panel/player_panel_data.dart';
 import 'golden_drawer.dart';
 import 'golden_player_theme.dart';
+import 'golden_track_label.dart';
 
 class GoldenAudioSourcesDrawer extends StatefulWidget {
   const GoldenAudioSourcesDrawer({
@@ -70,7 +71,14 @@ class _GoldenAudioSourcesDrawerState
 
   void _onControllerChanged() {
     final revision = widget.controller.value.trackRevision;
-    if (revision != _trackRevision) _refreshTracks();
+    if (revision != _trackRevision) {
+      _refreshTracks();
+    } else if (mounted) {
+      // The track list is the same but the ACTIVE track changed (a pick):
+      // repaint so the selected radio follows the pick at once instead of
+      // staying on the stale row.
+      setState(() {});
+    }
   }
 
   Future<void> _refreshTracks() async {
@@ -112,10 +120,11 @@ class _GoldenAudioSourcesDrawerState
               else
                 for (final track in _audioTracks)
                   _OptionTile(
-                    label: track.name,
-                    detail: track.language?.trim().isNotEmpty == true
-                        ? track.language!.trim()
-                        : null,
+                    // The language in the main label ("1VegaMovies.tw -
+                    // [Hindi]", "Hindi" for a bare "Audio 1"), so the
+                    // viewer can tell which audio it is at a glance.
+                    label: goldenTrackLabel(track.name, track.language),
+                    detail: goldenChannelName(track.channels),
                     selected:
                         track.id ==
                         widget.controller.value.activeAudioTrackId,
@@ -136,7 +145,7 @@ class _GoldenAudioSourcesDrawerState
               else
                 for (var i = 0; i < data.sources.length; i++)
                   _OptionTile(
-                    label: _sourceLabel(data.sources[i]),
+                    label: _sourceLabel(data.sources[i], i),
                     detail: data.failedSources.contains(i)
                         ? 'Failed'
                         : (data.playedSources.contains(i)
@@ -159,11 +168,15 @@ class _GoldenAudioSourcesDrawerState
   }
 
   /// The plugin's own label for the source, led by its provider, with the
-  /// quality after it — "HubCloud · 1080p".
-  String _sourceLabel(StreamResult stream) {
+  /// quality after it — "HubCloud · 1080p". A source the plugin did not
+  /// name at all still gets a row ("Source 3"), never an empty box.
+  String _sourceLabel(StreamResult stream, int index) {
     final base = sourceRowLabel(stream);
+    final label = base.trim().isEmpty
+        ? 'Source ${index + 1}'
+        : base;
     final quality = stream.quality;
-    return quality != null && quality > 0 ? '$base · ${quality}p' : base;
+    return quality != null && quality > 0 ? '$label · ${quality}p' : label;
   }
 }
 
