@@ -35,6 +35,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:vlc_player/vlc_player.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
+import '../../domain/track_language.dart';
 
 /// External (plugin) subtitle files live at ids from here up, so they can
 /// never collide with an embedded track's index.
@@ -259,9 +260,83 @@ class MpvVlcController implements VlcPlayerController {
     return index < 0 ? null : index;
   }
 
-  String _trackName(String? title, String fallback) {
+  /// The language name for a track's language code or label, or null when
+  /// it names none known here. Mirrors the panel's own `_languageName`
+  /// (player_panel_labels.dart): a code maps to its English name, a name
+  /// passes through, `und` (unknown) is nothing.
+  String? _languageName(String? language) {
+    final value = language?.trim();
+    if (value == null || value.isEmpty || value.toLowerCase() == 'und') {
+      return null;
+    }
+    final mapped = languageNameForCode(value);
+    if (mapped != null) return mapped;
+    if (value.length > 3) return value;
+    return value.toUpperCase();
+  }
+
+  /// The language a track's title itself carries, e.g. `[Hindi]` in
+  /// `Track 1 - [Hindi]` — the fallback when media_kit reports no
+  /// language for the track. `languageCodeOf` reads a bracketed name out
+  /// of a label.
+  String? _languageFromTitle(String title) {
+    final code = languageCodeOf(title);
+    if (code == null) return null;
+    return languageNameForCode(code);
+  }
+
+  /// Whether the title already carries its language (in brackets, or as a
+  /// word), so the display name does not read it twice.
+  bool _titleHasLanguage(String title, String language) {
+    final lowered = title.toLowerCase();
+    final lang = language.toLowerCase();
+    return lowered.contains('[$lang]') || lowered.contains(lang);
+  }
+
+  /// The audio/subtitle row's display name: the track's title with its
+  /// language in brackets, as the original shows — `MoviesDrives.bid -
+  /// [English]`. libVLC folds the language into the track name itself;
+  /// mpv (media_kit) reports the title and the language separately, and
+  /// the panel's `trackLabel` returns a non-empty title as-is, so the
+  /// language was lost and every row read the same bare title. The
+  /// language is appended here, where the adapter owns the mapping.
+  String _trackDisplayName({
+    required String? title,
+    required String? language,
+    required String fallback,
+  }) {
     final name = (title ?? '').trim();
-    return name.isEmpty ? fallback : name;
+    final lang = _languageName(language) ?? _languageFromTitle(name);
+    if (name.isNotEmpty) {
+      if (lang != null && !_titleHasLanguage(name, lang)) {
+        return '$name - [$lang]';
+      }
+      return name;
+    }
+    if (lang != null) return lang;
+    return fallback;
+  }
+
+  /// The channel count for an audio track: the demux channel count, else
+  /// the output channel count, else the channel layout string (`5.1` → 6)
+  /// — so the panel's detail line can read `5.1` as the original does.
+  int? _audioChannelCount(AudioTrack track) {
+    final count = track.channelscount ?? track.audiochannels;
+    if (count != null && count > 0) return count;
+    final layout = track.channels?.trim().toLowerCase();
+    if (layout == null || layout.isEmpty) return null;
+    return switch (layout) {
+      'mono' || '1.0' => 1,
+      'stereo' || '2.0' => 2,
+      '2.1' => 3,
+      '3.0' => 3,
+      '4.0' => 4,
+      '5.0' => 5,
+      '5.1' => 6,
+      '6.1' => 7,
+      '7.1' => 8,
+      _ => null,
+    };
   }
 
   // -- ValueNotifier (the stock UI listens to this) -------------------------
@@ -526,7 +601,11 @@ class MpvVlcController implements VlcPlayerController {
       for (var i = 0; i < _audioTracks.length; i++)
         VlcTrackDescription(
           id: i,
-          name: _trackName(_audioTracks[i].title, 'Audio ${i + 1}'),
+          name: _trackDisplayName(
+            title: _audioTracks[i].title,
+            language: _audioTracks[i].language,
+            fallback: 'Audio ${i + 1}',
+          ),
           language: _audioTracks[i].language,
         ),
     ];
@@ -547,7 +626,11 @@ class MpvVlcController implements VlcPlayerController {
       for (var i = 0; i < embedded.length; i++)
         VlcTrackDescription(
           id: i,
-          name: _trackName(embedded[i].title, 'Subtitle ${i + 1}'),
+          name: _trackDisplayName(
+            title: embedded[i].title,
+            language: embedded[i].language,
+            fallback: 'Subtitle ${i + 1}',
+          ),
           language: embedded[i].language,
         ),
       for (var i = 0; i < external.length; i++)
@@ -593,9 +676,32 @@ class MpvVlcController implements VlcPlayerController {
 
   @override
   Future<VlcMediaInfo> getMediaInfo() async {
+    // The panel's detail line (codec · channels · bitrate, e.g. `5.1`)
+    // comes from these lists, correlated by position with the track
+    // descriptions. mpv used to return only title + duration, so the
+    // detail line was always empty; the codec, language and channel count
+    // are all on media_kit's tracks, so they are reported here.
     return VlcMediaInfo(
       title: _mediaTitle(),
       duration: _value.duration,
+      audioTracks: <VlcMediaTrackInfo>[
+        for (final track in _audioTracks)
+          VlcMediaTrackInfo(
+            type: 'audio',
+            codec: track.codec,
+            language: track.language,
+            bitrate: track.bitrate,
+            channels: _audioChannelCount(track),
+            sampleRate: track.samplerate,
+          ),
+      ],
+      subtitleTracks: <VlcMediaTrackInfo>[
+        for (final track in _embeddedSubtitles)
+          VlcMediaTrackInfo(
+            type: 'subtitle',
+            language: track.language,
+          ),
+      ],
     );
   }
 }
