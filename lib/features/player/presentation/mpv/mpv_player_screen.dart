@@ -63,7 +63,9 @@ import '../../../../l10n/generated/app_localizations.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../skip/data/skip_service.dart';
 import '../../domain/episode_navigator.dart';
+import '../../domain/episode_duration.dart';
 import '../../domain/playback_progress.dart';
+import '../../domain/playback_recovery.dart';
 import '../../domain/playback_tracker.dart';
 import '../../domain/skip_segments.dart';
 import '../../domain/source_row_status.dart';
@@ -85,9 +87,19 @@ import 'mpv_vlc_controller.dart';
 /// media_kit maps `PlayerConfiguration.bufferSize` to mpv's
 /// `demuxer-max-bytes` and `demuxer-max-back-bytes`, so this one value is
 /// both how far ahead the engine pre-buffers and how much already-played
-/// data it keeps for a backward seek. 512 MiB matches v17's libVLC prefetch
-/// ring, so the engine comparison is on the same window.
-const int kMpvBufferSize = 512 * 1024 * 1024;
+/// data it keeps for a backward seek. It is the ONLY cache knob media_kit
+/// exposes — there is no public API for `cache-secs`,
+/// `demuxer-readahead-secs` or `cache-pause-*`, so a bigger cushion has to
+/// come through this size.
+///
+/// 768 MiB (up from 512 MiB in v18-mpv): at a 4K bitrate of ~25 Mbit/s the
+/// old cap held ~2.5 minutes of video; the new one holds ~4 minutes, which
+/// is the difference between riding out a 60–90 s dip on a slow mobile line
+/// and stalling on it. It is only a cap — mpv allocates what arrives, so a
+/// slow connection never pays for the headroom — and it is still small
+/// against an 8 GB phone. v17's libVLC prefetch ring was 512 MiB; mpv now
+/// holds more because its stall has no other recovery below.
+const int kMpvBufferSize = 768 * 1024 * 1024;
 
 /// How long an opened stream gets to show playback before it counts as dead
 /// and the failover moves to the next candidate.
@@ -112,8 +124,26 @@ const Duration _kMinListVisible = Duration(milliseconds: 3000);
 /// buffered gives it a cushion. The hold is capped at 4s so a slow source
 /// still starts instead of hanging on a paused first frame — and a fast
 /// source plays at once, since the buffer is usually there already.
+///
+/// A high-bitrate (4K) stream gets a bigger cushion: at ~25 Mbit/s the
+/// same 5s is only ~15 MB and the playhead eats it in seconds on a line
+/// that cannot keep up, so 4K opens wait for 10s (capped at 6s). The
+/// values are per-open — see [_prebufferTarget]/[_prebufferMaxWait],
+/// set in [_openStream] from [isHighBitrateStream].
 const Duration _kPrebufferTarget = Duration(seconds: 5);
 const Duration _kPrebufferMaxWait = Duration(seconds: 4);
+
+/// The pre-buffer target and hold cap for a high-bitrate (4K) open.
+/// See [_kPrebufferTarget].
+const Duration _kPrebufferTargetHighBitrate = Duration(seconds: 10);
+const Duration _kPrebufferMaxWaitHighBitrate = Duration(seconds: 6);
+
+/// How many times a stalled source may be reopened at the same position
+/// before the watchdog gives up on it and fails over to the next
+/// candidate (see [_onStallTick]). Two reopens are room for a demuxer
+/// that dropped its request twice; a third would just stall again on
+/// the same line, and the failover ladder has others to try.
+const int _kStallMaxReopens = 2;
 
 /// Pinch-zoom range, same as the VLC screen.
 const double _kMinZoom = 0.5;
@@ -229,6 +259,33 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   bool _awaitingPrebuffer = false;
   Timer? _prebufferTimer;
   int _prebufferToken = 0;
+
+  /// The pre-buffer target and hold cap for the open source, set in
+  /// [_openStream]: the ordinary [_kPrebufferTarget]/[_kPrebufferMaxWait],
+  /// or the high-bitrate pair for a 4K open (see
+  /// [isHighBitrateStream]).
+  Duration _prebufferTarget = _kPrebufferTarget;
+  Duration _prebufferMaxWait = _kPrebufferMaxWait;
+
+  /// Mid-playback stall recovery (see [_onStallTick]): the clock that
+  /// measures how long the playhead has stood still, the highest rung of
+  /// the [stallActionFor] ladder already fired for this stall window, and
+  /// how many times the current source has been reopened for a stall.
+  /// A source that plays again earns a fresh budget (see the tick); a
+  /// source reopened twice without playing is abandoned for the next
+  /// candidate instead of being reopened forever.
+  final StallClock _stallClock = StallClock();
+  StallAction _stallLastAction = StallAction.none;
+  int _stallRecoveries = 0;
+  int _stallStreamIndex = -1;
+
+  /// The buffered position the last stall tick saw: if it grew since then,
+  /// bytes are still arriving and the cache is refilling rather than dead
+  /// (see [stallActionFor]'s `arriving`).
+  Duration _stallBufferedAt = Duration.zero;
+
+  /// The stall watchdog's tick, every 2s while the screen lives.
+  Timer? _stallTimer;
 
   /// Where the open source started (its resume point, else zero): the
   /// pre-buffer cushion is measured from here, not from the stream start.
@@ -356,6 +413,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     WidgetsBinding.instance.removeObserver(this);
     _watchdogTimer?.cancel();
     _prebufferTimer?.cancel();
+    _stallTimer?.cancel();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -495,6 +553,13 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     );
 
     _listen();
+    // The mid-playback stall watchdog: a tick every 2s that asks whether
+    // the playhead has moved, and recovers the source when it has not
+    // (see _onStallTick). It stands down while the screen is gone.
+    _stallTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _onStallTick(),
+    );
     await _resolveAndOpen();
   }
 
@@ -753,6 +818,25 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _subtitleAppliedFor = -1;
     _adapter.clearError();
     final stream = _streams[index];
+    // A high-bitrate (4K) open waits for a bigger cushion (see the
+    // pre-buffer consts); an ordinary open keeps the 5s target.
+    final highBitrate = isHighBitrateStream(stream);
+    _prebufferTarget = highBitrate
+        ? _kPrebufferTargetHighBitrate
+        : _kPrebufferTarget;
+    _prebufferMaxWait = highBitrate
+        ? _kPrebufferMaxWaitHighBitrate
+        : _kPrebufferMaxWait;
+    // A new source earns a fresh stall budget; a reopen of the same one
+    // (stall recovery) keeps its count, so a source that cannot play is
+    // abandoned for the next candidate instead of reopened forever.
+    if (index != _stallStreamIndex) {
+      _stallStreamIndex = index;
+      _stallRecoveries = 0;
+      _stallLastAction = StallAction.none;
+      _stallClock.reset();
+    }
+    _stallBufferedAt = Duration.zero;
     _sessionToken++;
     _tracker = PlaybackTracker(
       read: ref.read,
@@ -812,7 +896,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       return;
     }
     _prebufferTimer?.cancel();
-    _prebufferTimer = Timer(_kPrebufferMaxWait, () {
+    _prebufferTimer = Timer(_prebufferMaxWait, () {
       if (_disposed || token != _prebufferToken) return;
       _startAfterPrebuffer(token);
     });
@@ -820,7 +904,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   /// Whether the buffered cushion ahead of the playhead meets the target.
   bool get _prebufferReady =>
-      _buffered - _openStart >= _kPrebufferTarget;
+      _buffered - _openStart >= _prebufferTarget;
 
   void _startAfterPrebuffer([int? token]) {
     if (!_awaitingPrebuffer) return;
@@ -830,6 +914,79 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _prebufferTimer = null;
     if (_disposed) return;
     unawaited(_player.play());
+  }
+
+  /// One tick of the mid-playback stall watchdog (every 2s).
+  ///
+  /// The start-only pre-buffer (see [_waitForPrebuffer]) does nothing once
+  /// playback has begun: on a line slower than a 4K stream's bitrate the
+  /// forward cache drains mid-film, mpv's spinner comes up, and the
+  /// playhead sits still — in the video the user sent, forever, with
+  /// Control Center reading "Not Playing". The engine's `buffering` flag
+  /// alone cannot be the trigger (it is true through healthy playback
+  /// while the cache refills), so the trigger is the ground truth from
+  /// [stallActionFor]: a playhead that has not moved.
+  ///
+  /// The ladder is the shared one, so a stall is ridden out before
+  /// anything is done about it: a seek back to the frozen position at
+  /// 10s (a fresh request for a demuxer that dropped its own — on a
+  /// stalled HLS stream the forward cache is empty, so the seek throws
+  /// nothing away), then a reopen of the same source at the same
+  /// position at 25s, then the next candidate after two failed reopens.
+  /// The nudge is kept for HLS on purpose: the ladder's `adaptive`
+  /// exemption is written for libVLC, whose adaptive module restarts
+  /// every stream at the playhead's segment and drops a rendition on a
+  /// seek. mpv's HLS demuxer only re-fetches the segment at the seek
+  /// point, and a stalled one has nothing buffered to lose — so the
+  /// nudge is the move that restarts a demuxer whose segment retries
+  /// are spent, not a cost.
+  /// A source that is still delivering bytes (the buffered position
+  /// growing) is refilling, not dead: no nudge, and recovery waits out
+  /// the longest refill. Playback that is not expected — the viewer's
+  /// own pause, the pre-buffer wait, or nothing started yet — restarts
+  /// the clock instead of counting against the source, so ten minutes
+  /// paused is never ten minutes stalled the moment play resumes.
+  void _onStallTick() {
+    if (_disposed || !_startedPlaying || _awaitingPrebuffer) return;
+    final state = _player.state;
+    if (!state.playing && !state.buffering) {
+      _stallClock.restart();
+      _stallLastAction = StallAction.none;
+      return;
+    }
+    final moved = _stallClock.tick(_position);
+    if (moved) {
+      // The picture is moving again: the stall is over and the source
+      // has earned a fresh recovery budget.
+      _stallLastAction = StallAction.none;
+      _stallRecoveries = 0;
+      _stallBufferedAt = _buffered;
+      return;
+    }
+    final arriving = _buffered > _stallBufferedAt;
+    _stallBufferedAt = _buffered;
+    final action = stallActionFor(
+      stalledFor: _stallClock.stalledFor,
+      hadFrames: _startedPlaying,
+      lastAction: _stallLastAction,
+      arriving: arriving,
+    );
+    switch (action) {
+      case StallAction.none:
+        break;
+      case StallAction.nudge:
+        _stallLastAction = StallAction.nudge;
+        unawaited(_player.seek(_position));
+      case StallAction.recover:
+        _stallLastAction = StallAction.recover;
+        _stallClock.reset();
+        if (_stallRecoveries < _kStallMaxReopens) {
+          _stallRecoveries++;
+          unawaited(_openStream(_streamIndex, start: _position));
+        } else {
+          _tryNextStream();
+        }
+    }
   }
 
   void _armWatchdog() {
@@ -1009,20 +1166,19 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   }
 
   /// How long [episode] is, for the Episodes drawer: the history's exact
-  /// seconds first, else the plugin's runtime in minutes.
+  /// duration first, else the plugin's runtime in minutes.
   Duration? _episodeDurationFor(Episode episode) {
     final mainUrl = widget.item.url;
     final history = ref.read(historyRepositoryProvider);
-    final seconds = history.getEpisodeDuration(
-      episode.url,
-      mainUrl: mainUrl,
-      season: episode.season,
-      episode: episode.episode,
+    return episodeDurationFromHistoryMs(
+      history.getEpisodeDuration(
+        episode.url,
+        mainUrl: mainUrl,
+        season: episode.season,
+        episode: episode.episode,
+      ),
+      runtimeMinutes: episode.runtime,
     );
-    if (seconds > 0) return Duration(seconds: seconds);
-    final runtime = episode.runtime;
-    if (runtime != null && runtime > 0) return Duration(minutes: runtime);
-    return null;
   }
 
   // -- episodes -------------------------------------------------------------

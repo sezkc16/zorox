@@ -211,6 +211,16 @@ String? sourceQualityLabel(StreamResult stream) {
   };
 }
 
+/// Whether a source is high-bitrate (4K): the parsed height is 2160 or
+/// more, or its label names 4K. Used for the pre-buffer: a 4K stream
+/// burns through a 5s cushion in seconds on a line that cannot keep up,
+/// so it opens with a bigger one (see the mpv screen's
+/// `_kPrebufferTargetHighBitrate`). An adaptive (0) stream with no 4K in
+/// its label reads as ordinary — its renditions are unknown until the
+/// playlist is read, and guessing 4K would hold every start longer.
+bool isHighBitrateStream(StreamResult stream) =>
+    sourceQualityLabel(stream) == '4K';
+
 /// A quality written in a source label: "1080p" in a filename, "4K" on
 /// its own. The word boundary keeps "4KHDHub" (a provider name) from
 /// reading as a 4K stream.

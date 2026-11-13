@@ -266,4 +266,58 @@ void main() {
       expect(play(isCurrent: true, failed: true), SourcePlayState.opening);
     });
   });
+
+  // The stall recovery gives 4K a bigger buffer and a longer start
+  // cushion than 1080p, so the two have to be told apart — and told
+  // apart only by the stream's own quality, never by its name.
+  group('high-bitrate stream', () {
+    StreamResult stream({int? quality, String source = 'A'}) =>
+        StreamResult(
+          url: 'https://cdn.example/film.m3u8',
+          source: source,
+          quality: quality,
+        );
+
+    test('a 4K stream is high-bitrate', () {
+      expect(isHighBitrateStream(stream(quality: 2160)), isTrue);
+      expect(isHighBitrateStream(stream(quality: 4320)), isTrue);
+    });
+
+    test('1080p and below are not', () {
+      expect(isHighBitrateStream(stream(quality: 1080)), isFalse);
+      expect(isHighBitrateStream(stream(quality: 720)), isFalse);
+      expect(isHighBitrateStream(stream(quality: 480)), isFalse);
+    });
+
+    test('the label says so when the quality is missing', () {
+      expect(
+        isHighBitrateStream(stream(source: 'HubCloud 4K [16.74 GB]')),
+        isTrue,
+      );
+      expect(
+        isHighBitrateStream(stream(source: '2160p HEVC')),
+        isTrue,
+        reason: 'a 2160p label is 4K by another name',
+      );
+      expect(
+        isHighBitrateStream(stream(source: 'UHD BluRay')),
+        isTrue,
+      );
+    });
+
+    test('a 1080p label is not 4K, even on a 4K-named provider', () {
+      expect(
+        isHighBitrateStream(stream(source: '4KHDHub 1080p')),
+        isFalse,
+        reason: 'the provider name is not a quality',
+      );
+    });
+
+    test('a stream that reports no quality is not assumed to be 4K', () {
+      expect(
+        isHighBitrateStream(stream(source: 'HubCloud 1080p')),
+        isFalse,
+      );
+    });
+  });
 }

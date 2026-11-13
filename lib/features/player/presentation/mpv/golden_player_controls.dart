@@ -177,6 +177,12 @@ class _GoldenPlayerControlsState
   /// Whether the 2x pill is up.
   bool _boosting = false;
 
+  /// The centre play/pause flash, shown briefly after a centre
+  /// double-tap (see [_showCenterFlash]): the icon of the state the
+  /// player is moving into, or null when no flash is up.
+  IconData? _centerFlashIcon;
+  Timer? _centerFlashTimer;
+
   /// A seekbar drag in flight, and its preview target.
   bool _seeking = false;
   Duration _seekPreview = Duration.zero;
@@ -262,10 +268,40 @@ class _GoldenPlayerControlsState
     widget.chrome.keepAlive();
   }
 
-  void _doubleTapSeek(double dx) {
+  void _doubleTap(double dx) {
     final width = context.size?.width ?? 0;
     if (width <= 0) return;
+    // Zones are thirds, not halves: the centre third toggles play/pause
+    // and the outer thirds seek ±10s, so a double-tap near the middle
+    // never seeks when the viewer meant to pause (and a seek near the
+    // edge never pauses when the viewer meant to skip). Locked, this
+    // never runs — the locked layer has no double-tap at all.
+    if (dx >= width / 3 && dx <= 2 * width / 3) {
+      _togglePlayWithFlash();
+      return;
+    }
     _seekBy(dx >= width / 2 ? _kGoldenSeekStep : -_kGoldenSeekStep);
+  }
+
+  /// Centre double-tap: pause if playing, resume if paused, and flash
+  /// the state the player is moving into, so the tap is seen as well
+  /// as felt. The flash is the centre button's own look — a dark
+  /// translucent circle with a white icon — so it reads as one control.
+  void _togglePlayWithFlash() {
+    final wasPlaying = widget.controller.value.isPlaying;
+    _togglePlay();
+    _showCenterFlash(
+      wasPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+    );
+  }
+
+  void _showCenterFlash(IconData icon) {
+    _centerFlashTimer?.cancel();
+    setState(() => _centerFlashIcon = icon);
+    _centerFlashTimer = Timer(const Duration(milliseconds: 700), () {
+      if (!mounted) return;
+      setState(() => _centerFlashIcon = null);
+    });
   }
 
   // -- 2x hold ---------------------------------------------------------------
@@ -653,11 +689,12 @@ class _GoldenPlayerControlsState
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        // The gesture layer: tap toggles the chrome, double-tap seeks,
-        // long-press (right half) holds 2x, pinch zooms, vertical swipe
-        // rails volume (right) / brightness (left). Locked, only a bare
-        // tap survives — a request to see the unlock chip, never a
-        // request to hide it.
+        // The gesture layer: tap toggles the chrome, double-tap seeks
+        // on the outer thirds and toggles play/pause in the centre
+        // third, long-press (right half) holds 2x, pinch zooms,
+        // vertical swipe rails volume (right) / brightness (left).
+        // Locked, only a bare tap survives — a request to see the
+        // unlock chip, never a request to hide it.
         if (isLocked)
           GestureDetector(
             behavior: HitTestBehavior.translucent,
@@ -673,7 +710,7 @@ class _GoldenPlayerControlsState
               behavior: HitTestBehavior.translucent,
               onTap: widget.chrome.toggle,
               onDoubleTapDown: doubleTapEnabled
-                  ? (d) => _doubleTapSeek(d.localPosition.dx)
+                  ? (d) => _doubleTap(d.localPosition.dx)
                   : null,
               onScaleStart: _onScaleStart,
               onScaleUpdate: _onScaleUpdate,
@@ -709,7 +746,31 @@ class _GoldenPlayerControlsState
           },
         ),
 
-        // The 2x pill + hint, while a hold is down (mockup: centre-right).
+        // The centre play/pause flash, briefly after a centre
+        // double-tap. Same dark translucent circle as the centre button.
+        AnimatedOpacity(
+          opacity: _centerFlashIcon == null ? 0.0 : 1.0,
+          duration: GoldenPlayerMotion.fast,
+          child: _centerFlashIcon == null
+              ? const SizedBox.shrink()
+              : Center(
+                  child: Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      _centerFlashIcon,
+                      size: 36,
+                      color: GoldenPlayerColors.textPrimary,
+                    ),
+                  ),
+                ),
+        ),
+
+        // The 2x pill, while a hold is down (mockup: centre-right).
         AnimatedOpacity(
           opacity: _boosting ? 1.0 : 0.0,
           duration: GoldenPlayerMotion.fast,
@@ -1012,6 +1073,7 @@ class _GoldenPlayerControlsState
       _speedBeforeBoost = null;
       unawaited(widget.controller.setPlaybackSpeed(previous));
     }
+    _centerFlashTimer?.cancel();
     // Application brightness is a process-wide override, so leaving the
     // player gives the screen back to the system's level.
     if (_brightnessOverridden) _brightnessControl.reset();
@@ -1127,62 +1189,44 @@ class _GoldenRail extends StatelessWidget {
   }
 }
 
-/// The gold "▶▶ 2x" pill + hint, shown while a right-side hold is down.
+/// The gold "▶▶ 2x" pill, shown while a right-side hold is down.
+///
+/// Pill only, no hint text: the viewer asked for the "Hold right side
+/// for 2x speed / Release to return to normal" lines to go — the pill
+/// itself says what is happening, and the text just covers the picture.
 class _TwoXIndicator extends StatelessWidget {
   const _TwoXIndicator();
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.55),
-            borderRadius: BorderRadius.circular(GoldenPlayerRadii.pill),
-            border: Border.all(
-              color: GoldenPlayerColors.gold.withValues(alpha: 0.7),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(GoldenPlayerRadii.pill),
+        border: Border.all(
+          color: GoldenPlayerColors.gold.withValues(alpha: 0.7),
+        ),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            Icons.fast_forward_rounded,
+            color: GoldenPlayerColors.goldHighlight,
+            size: 20,
+          ),
+          SizedBox(width: 4),
+          Text(
+            '2x',
+            style: TextStyle(
+              color: GoldenPlayerColors.goldHighlight,
+              fontWeight: FontWeight.w800,
+              fontSize: 16,
             ),
           ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Icon(
-                Icons.fast_forward_rounded,
-                color: GoldenPlayerColors.goldHighlight,
-                size: 20,
-              ),
-              SizedBox(width: 4),
-              Text(
-                '2x',
-                style: TextStyle(
-                  color: GoldenPlayerColors.goldHighlight,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 16,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 10),
-        const Text(
-          'Hold right side for 2x speed',
-          style: TextStyle(
-            color: GoldenPlayerColors.textPrimary,
-            fontWeight: FontWeight.w600,
-            fontSize: 13,
-          ),
-        ),
-        const SizedBox(height: 2),
-        const Text(
-          'Release to return to normal',
-          style: TextStyle(
-            color: GoldenPlayerColors.textSecondary,
-            fontSize: 11,
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

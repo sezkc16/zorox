@@ -16,8 +16,9 @@ import '../vlc/panel/player_panel_data.dart';
 import 'golden_drawer.dart';
 import 'golden_player_theme.dart';
 
-/// How the drawer learns an episode's length: the history's exact seconds
-/// first (mm:ss), else the plugin's runtime in minutes ("54 min").
+/// How the drawer learns an episode's length: the history's exact
+/// duration first (stored in milliseconds), else the plugin's runtime
+/// in minutes ("54 min").
 typedef GoldenEpisodeDuration = Duration? Function(Episode episode);
 
 class GoldenEpisodesDrawer extends StatefulWidget {
