@@ -79,7 +79,6 @@ import '../vlc/panel/player_panel_data.dart';
 import '../vlc/panel/player_panel_labels.dart';
 import '../vlc/player_startup_view.dart';
 import 'golden_player_controls.dart';
-import 'mpv_options.dart';
 import 'mpv_subtitle_style.dart';
 import 'mpv_vlc_controller.dart';
 
@@ -554,15 +553,6 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     );
 
     _listen();
-    // Nuvio's iOS mpv options media_kit does not set (see mpv_options.dart):
-    // applied here — after the VideoController (which owns `hwdec`) exists
-    // and before the first open, so they govern every file this player
-    // loads. Best-effort: a failure leaves media_kit's defaults in place
-    // and the open still goes ahead.
-    final platform = _player.platform;
-    if (platform is NativePlayer) {
-      await applyMpvNuvioOptions(platform);
-    }
     // The mid-playback stall watchdog: a tick every 2s that asks whether
     // the playhead has moved, and recovers the source when it has not
     // (see _onStallTick). It stands down while the screen is gone.
