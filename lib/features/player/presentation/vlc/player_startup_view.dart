@@ -28,7 +28,10 @@ import 'panel/player_panel_labels.dart'
 /// The server the source is on ("FSLv2", "PixelDrain") is a third fact, shown
 /// as a chip: the label truncates it away (it sits at the end of a long
 /// plugin label), and the viewer picks by server. Null where the source
-/// names no server, which leaves the row exactly as it was.
+/// names no server, which leaves the row exactly as it was. The quality
+/// ("4K", "1080p") is a fourth fact, shown as a gold chip beside the
+/// server's: the label truncates it away too, and the viewer picks by
+/// quality as well. Null where the source names no quality.
 @immutable
 class StartupRow {
   const StartupRow({
@@ -36,12 +39,14 @@ class StartupRow {
     required this.reachability,
     this.playState = SourcePlayState.untried,
     this.server,
+    this.quality,
   });
 
   final String label;
   final SourceReachability reachability;
   final SourcePlayState playState;
   final String? server;
+  final String? quality;
 
   @override
   bool operator ==(Object other) =>
@@ -49,10 +54,12 @@ class StartupRow {
       other.label == label &&
       other.reachability == reachability &&
       other.playState == playState &&
-      other.server == server;
+      other.server == server &&
+      other.quality == quality;
 
   @override
-  int get hashCode => Object.hash(label, reachability, playState, server);
+  int get hashCode =>
+      Object.hash(label, reachability, playState, server, quality);
 }
 
 class PlayerStartupView extends StatefulWidget {
@@ -697,6 +704,38 @@ class _SourceRow extends StatelessWidget {
                     ),
                   ),
                 ),
+                // The quality, as a gold chip, then the server: the label
+                // truncates both away, and the viewer picks by both.
+                // Absent where the source names no quality.
+                if (row.quality != null && row.quality!.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD4AF37).withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: const Color(
+                          0xFFD4AF37,
+                        ).withValues(alpha: 0.45),
+                      ),
+                    ),
+                    child: Text(
+                      row.quality!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Color(0xFFF5D78E),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
                 // The server, as a chip: the label truncates it away (it
                 // sits at the end of a long plugin label), and the viewer
                 // picks by server. Absent where the source names none.

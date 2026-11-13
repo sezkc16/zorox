@@ -19,13 +19,18 @@
 ///   * double-tap left/right seeks ∓10 s;
 ///   * long-press on the RIGHT half holds 2x until release (the saved
 ///     speed is restored exactly — 1.5x comes back as 1.5x);
-///   * pinch zooms the picture (the screen's [videoScale]).
+///   * pinch zooms the picture (the screen's [videoScale]);
+///   * vertical swipe on the RIGHT half changes the volume, on the LEFT
+///     half the screen brightness — a full screen height is the whole
+///     range. A small gold rail shows the level and fades after the swipe
+///     ends. A swipe that is clearly horizontal does nothing (the Golden
+///     player has no swipe-seek), and a pinch still zooms.
 ///
 /// Everything is wired to the real engine through the adapter: no
 /// placeholder buttons. No Cast button — mpv/media_kit has no cast in
 /// this app, and a dead one is worse than none. No PiP — mpv renders
 /// through a Metal texture. The drawers (Episodes, Subtitle Style,
-/// Audio & Sources) slide in from the right over the video.
+/// Audio, Sources) slide in from the right over the video.
 library;
 
 import 'dart:async';
@@ -39,8 +44,10 @@ import '../../../../../core/domain/entity/multimedia_item.dart';
 import '../../../settings/presentation/player_settings_provider.dart';
 import '../../../skip/data/skip_service.dart';
 import '../../domain/skip_segments.dart';
+import '../player_brightness.dart';
 import '../vlc/chrome_visibility_controller.dart';
 import '../vlc/panel/player_panel_data.dart';
+import '../vlc/transient_overlay.dart';
 import 'golden_episodes_drawer.dart';
 import 'golden_options_drawer.dart';
 import 'golden_player_theme.dart';
@@ -50,7 +57,13 @@ import 'golden_subtitle_style_drawer.dart';
 const Duration _kGoldenSeekStep = Duration(seconds: 10);
 
 /// Which right-side drawer is open, if any.
-enum _GoldenDrawerKind { none, episodes, subtitleStyle, audioSources }
+enum _GoldenDrawerKind { none, episodes, subtitleStyle, audio, sources }
+
+/// The axis a single-finger pan has committed to, if any.
+///
+/// Decided once, from the down point, so a diagonal swipe is one gesture
+/// or the other — never both, and never a rail that becomes a seek.
+enum _GoldenPanAxis { none, horizontal, vertical }
 
 class GoldenPlayerControls extends ConsumerStatefulWidget {
   const GoldenPlayerControls({
@@ -172,6 +185,57 @@ class _GoldenPlayerControlsState
   bool _pinching = false;
   double _pinchStartScale = 1.0;
 
+  // -- vertical swipe rails (volume right / brightness left) --------------
+  //
+  // One scale recognizer owns the single-finger pan and the pinch together
+  // (the stock chrome's shape): the axis is decided once, from the down
+  // point, and a clearly vertical pan becomes a rail. Right half = the
+  // mpv volume, left half = the screen brightness, through the same seam
+  // the stock chrome uses ([PlatformPlayerBrightness]).
+  _GoldenPanAxis _panAxis = _GoldenPanAxis.none;
+
+  /// The down point the pan's travel is measured from, landed by a
+  /// Listener before any arena resolution (the scale recognizer spends
+  /// its slop first, so its own start would drop the first travel).
+  Offset? _panAnchor;
+  double? _panAnchorLocalX;
+
+  /// Whether the rail in flight is volume (true) or brightness (false);
+  /// null when no rail is down.
+  bool? _dragIsVolume;
+
+  /// The level the swipe counts from, and the running level as the travel
+  /// lands: volume 0..100, brightness 0..1.
+  double _dragStart = 0;
+
+  /// Whether the start level has been read. The brightness read is async,
+  /// so a flick's travel waits here ([_dragPending]) and lands once the
+  /// read does, rather than being dropped.
+  bool _dragReady = false;
+  double _dragPending = 0;
+  int _dragId = 0;
+
+  /// The screen's brightness, mirrored from the last read. The app's
+  /// brightness is a process-wide override, so leaving the player gives
+  /// the screen back to the system's level (see [dispose]).
+  double _brightness = 0.5;
+  bool _brightnessOverridden = false;
+  late final PlayerBrightness _brightnessControl =
+      PlatformPlayerBrightness();
+
+  /// The volume / brightness rail. Written on every drag update, same rule
+  /// as the stock chrome: the rail owns its own hide timer, so the drag
+  /// writes never rebuild the overlay.
+  final TransientValue<_GoldenRailData> _rail =
+      TransientValue<_GoldenRailData>();
+
+  /// Rails are a touch gesture: the stock chrome has none on desktop, and
+  /// neither does this one.
+  static bool get _isTouch => switch (defaultTargetPlatform) {
+    TargetPlatform.iOS || TargetPlatform.android => true,
+    _ => false,
+  };
+
   bool get _locked => widget.locked?.value ?? false;
 
   bool get _isSeries => widget.panelData.value.episodes.isNotEmpty;
@@ -228,33 +292,255 @@ class _GoldenPlayerControlsState
     if (mounted) setState(() => _boosting = false);
   }
 
-  // -- pinch zoom -------------------------------------------------------------
+  // -- pinch zoom + vertical swipe rails -----------------------------------
 
+  /// Lands the pan's anchor: a [Listener] reports the pointer's down
+  /// immediately, before any arena resolution. The tap recognizer's
+  /// `onTapDown` cannot do this — it only fires once the tap has won the
+  /// arena, and a pan's tap never does. The anchor is only taken while no
+  /// pan or pinch is in flight, so a second finger landing mid-gesture
+  /// cannot move it.
+  void _onPointerDown(PointerDownEvent event) {
+    if (_panAxis != _GoldenPanAxis.none || _pinching) return;
+    _panAnchor = event.position;
+    _panAnchorLocalX = event.localPosition.dx;
+  }
+
+  /// The one scale gesture: pan with one finger, pinch with two.
+  ///
+  /// Why one recognizer, and not a separate drag pair: the scale
+  /// recognizer used to live under the video, below this detector's drag
+  /// recognizers, and the two raced in the gesture arena for the same
+  /// first finger. One recognizer cannot race itself: while it tracks one
+  /// finger its focal movement is the pan, and the moment a second finger
+  /// lands its span is the pinch. The tap, the double-tap seek and the
+  /// long-press boost stay on separate recognizers in the same detector —
+  /// a tap moves nowhere and a hold moves nowhere, so neither can steal a
+  /// pinch that moves, and a swipe that moves wins the arena before the
+  /// long-press timer fires.
   void _onScaleStart(ScaleStartDetails d) {
+    // A stale pan from an end the framework never delivered — an
+    // interrupted pointer — is cleared here, so the next gesture does not
+    // inherit a rail.
+    _railDragEnd();
+    _panAxis = _GoldenPanAxis.none;
     if (d.pointerCount >= 2) {
       _pinching = true;
       _pinchStartScale = widget.videoScale?.value ?? 1.0;
       // A pinch is deliberate, not a hold: a 2x boost goes away with it.
       _endSpeedBoost();
+      return;
     }
+    // One finger. A pinch that wound down to one finger restarts here as a
+    // pan, from where the finger is now — not from where it went down,
+    // which the pinch already spent.
+    final bool wasPinching = _pinching;
+    _pinching = false;
+    if (wasPinching || _panAnchor == null) {
+      _panAnchor = d.focalPoint;
+      _panAnchorLocalX = d.localFocalPoint.dx;
+    }
+    // Otherwise the anchor is the down point the Listener recorded, which
+    // is what the first update measures the pan's travel from.
   }
 
   void _onScaleUpdate(ScaleUpdateDetails d) {
-    if (!_pinching || d.pointerCount < 2) return;
-    final notifier = widget.videoScale;
-    if (notifier == null) return;
-    final scale = (_pinchStartScale * d.scale).clamp(0.5, 3.0).toDouble();
-    if (scale != notifier.value) notifier.value = scale;
+    if (d.pointerCount >= 2) {
+      // A second finger landed mid-pan: the pan is cancelled, not
+      // committed. A rail already applies live, so ending it is only
+      // hiding it on its clock.
+      if (!_pinching) {
+        _pinching = true;
+        _pinchStartScale = widget.videoScale?.value ?? 1.0;
+        _railDragEnd();
+        _endSpeedBoost();
+      }
+      final notifier = widget.videoScale;
+      if (notifier == null) return;
+      // details.scale is the fingers' distance relative to the gesture's
+      // start — under 1.0 while pinching in — so this falls as well as
+      // rises. clamp() returns num; toDouble() keeps the value a double.
+      final double scale =
+          (_pinchStartScale * d.scale).clamp(0.5, 3.0).toDouble();
+      if (scale != notifier.value) notifier.value = scale;
+      return;
+    }
+    if (_pinching || d.pointerCount != 1) return;
+    if (_panAxis == _GoldenPanAxis.none) {
+      // The pan's travel is measured from the anchor — the down point —
+      // not from the scale recognizer's start: the recognizer spends the
+      // first pixels crossing its own slop before it starts. Measuring
+      // from the anchor keeps the rail's first travel the same, so a
+      // short drag still moves the level. The travel is derived from two
+      // points, never accumulated, so it can never be counted twice.
+      final Offset anchor = _panAnchor ?? d.focalPoint;
+      final Offset travel = d.focalPoint - anchor;
+      if (travel.distance < 10) return;
+      _panAxis = travel.dx.abs() >= travel.dy.abs()
+          ? _GoldenPanAxis.horizontal
+          : _GoldenPanAxis.vertical;
+      if (_panAxis == _GoldenPanAxis.vertical) {
+        unawaited(_beginRail(_panAnchorLocalX ?? d.localFocalPoint.dx));
+        // The rail is incremental: this update applies the whole travel
+        // since the down point in one go, and the updates that follow it
+        // each apply only their own.
+        _updateRail(travel.dy);
+      }
+      // A horizontal pan does nothing: the Golden player has no
+      // swipe-seek, and the axis stays horizontal so a later update
+      // cannot turn it into a rail.
+      return;
+    }
+    if (_panAxis == _GoldenPanAxis.vertical) {
+      _updateRail(d.focalPointDelta.dy);
+    }
   }
 
   void _onScaleEnd(ScaleEndDetails d) {
-    if (!_pinching) return;
-    _pinching = false;
-    final notifier = widget.videoScale;
-    if (notifier != null) {
-      final settled = notifier.value.clamp(0.5, 3.0).toDouble();
-      if (settled != notifier.value) notifier.value = settled;
+    if (d.pointerCount >= 2) {
+      // More than one pointer is still down: the pan just ended because a
+      // second finger landed, and the gesture carries on as a pinch.
+      _pinching = true;
+      _pinchStartScale = widget.videoScale?.value ?? 1.0;
+      _railDragEnd();
+      _endSpeedBoost();
+      _panAxis = _GoldenPanAxis.none;
+      return;
     }
+    if (_pinching) {
+      // The pinch wound down to one finger (or none): the scale sticks
+      // where it left it, re-clamped here so the settled value is always
+      // inside the range. One finger remaining carries on as a pan from
+      // here, so the axis is undecided again rather than committed.
+      _pinching = false;
+      final notifier = widget.videoScale;
+      if (notifier != null) {
+        final double settled = notifier.value.clamp(0.5, 3.0).toDouble();
+        if (settled != notifier.value) notifier.value = settled;
+      }
+      _panAxis = _GoldenPanAxis.none;
+      // The gesture is over (or winding down to a pan the restart
+      // re-anchors): the anchor must not outlive it.
+      _panAnchor = null;
+      _panAnchorLocalX = null;
+      return;
+    }
+    // The last pointer lifted: the pan commits.
+    if (_panAxis == _GoldenPanAxis.vertical) {
+      _railDragEnd();
+    }
+    _panAxis = _GoldenPanAxis.none;
+    _panAnchor = null;
+    _panAnchorLocalX = null;
+  }
+
+  /// Starts a brightness or volume rail: brightness on the left half,
+  /// volume on the right. [localX] is the finger's x in this detector's
+  /// coordinates, which is what decides the half.
+  Future<void> _beginRail(double localX) async {
+    if (!_isTouch) {
+      _dragIsVolume = null;
+      return;
+    }
+    final width = context.size?.width ?? 0;
+    if (width <= 0) return;
+    final isVolume = localX >= width / 2;
+    final id = ++_dragId;
+    _dragIsVolume = isVolume;
+    _dragReady = false;
+    _dragPending = 0;
+    // Read as each swipe starts, as the stock chrome does: the level can
+    // have moved with no word to the player — Control Center or the
+    // notification shade move the brightness. A platform with no answer
+    // carries on from the mirrored one. The volume is the controller's
+    // own value, read synchronously.
+    if (isVolume) {
+      _dragStart = widget.controller.value.volume.toDouble();
+    } else {
+      final level = await _brightnessControl.read();
+      if (!mounted || id != _dragId) return;
+      if (level != null) _brightness = level;
+      _dragStart = _brightness;
+    }
+    _dragReady = true;
+    final pending = _dragPending;
+    _dragPending = 0;
+    // A flick can end before the read lands: its travel still counts, and
+    // the rail then keeps its own clock.
+    if (pending != 0) {
+      _railTravel(isVolume, pending, live: _dragIsVolume == isVolume);
+    }
+  }
+
+  /// A full screen height of travel covers the whole range.
+  ///
+  /// [primaryDelta] is the finger's vertical travel since the last update.
+  void _updateRail(double primaryDelta) {
+    final isVolume = _dragIsVolume;
+    if (isVolume == null) return;
+    final height = context.size?.height ?? 0;
+    if (height <= 0) return;
+
+    final travel = -primaryDelta / height;
+    if (!_dragReady) {
+      _dragPending += travel;
+      return;
+    }
+    _railTravel(isVolume, travel);
+  }
+
+  /// Moves the swipe's level by [travel], a share of the screen's height,
+  /// and applies it. Not [live]: the finger has already lifted, so the
+  /// rail hides on its own clock.
+  void _railTravel(bool isVolume, double travel, {bool live = true}) {
+    if (isVolume) {
+      // The Golden player's volume is 0..100, matching its volume sheet;
+      // no boost past 100% on a swipe.
+      final level = (_dragStart + travel * 100).clamp(0.0, 100.0);
+      _dragStart = level;
+      unawaited(widget.controller.setVolume(level.round()));
+      _rail.show(
+        _GoldenRailData(
+          icon: _volumeIcon(level),
+          value: level / 100,
+          label: '${level.round()}%',
+          onLeft: false,
+        ),
+        hideAfter: live ? null : const Duration(milliseconds: 900),
+      );
+    } else {
+      _dragStart = (_dragStart + travel).clamp(0.0, 1.0);
+      _brightness = _dragStart;
+      _brightnessOverridden = true;
+      _brightnessControl.set(_brightness);
+      _rail.show(
+        _GoldenRailData(
+          icon: _brightnessIcon(_brightness),
+          value: _brightness,
+          label: '${(_brightness * 100).round()}%',
+          onLeft: true,
+        ),
+        hideAfter: live ? null : const Duration(milliseconds: 500),
+      );
+    }
+  }
+
+  static IconData _volumeIcon(double level) {
+    if (level <= 0) return Icons.volume_off_rounded;
+    if (level < 50) return Icons.volume_down_rounded;
+    return Icons.volume_up_rounded;
+  }
+
+  static IconData _brightnessIcon(double value) {
+    final clamped = value.clamp(0.0, 1.0);
+    if (clamped < 0.33) return Icons.brightness_5_rounded;
+    if (clamped < 0.67) return Icons.brightness_6_rounded;
+    return Icons.brightness_7_rounded;
+  }
+
+  void _railDragEnd() {
+    _dragIsVolume = null;
+    _rail.clearAfter(const Duration(milliseconds: 1500));
   }
 
   // -- drawers ----------------------------------------------------------------
@@ -368,8 +654,9 @@ class _GoldenPlayerControlsState
       fit: StackFit.expand,
       children: <Widget>[
         // The gesture layer: tap toggles the chrome, double-tap seeks,
-        // long-press (right half) holds 2x, pinch zooms. Locked, only a
-        // bare tap survives — a request to see the unlock chip, never a
+        // long-press (right half) holds 2x, pinch zooms, vertical swipe
+        // rails volume (right) / brightness (left). Locked, only a bare
+        // tap survives — a request to see the unlock chip, never a
         // request to hide it.
         if (isLocked)
           GestureDetector(
@@ -377,19 +664,32 @@ class _GoldenPlayerControlsState
             onTap: widget.chrome.poke,
           )
         else
-          GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onTap: widget.chrome.toggle,
-            onDoubleTapDown: doubleTapEnabled
-                ? (d) => _doubleTapSeek(d.localPosition.dx)
-                : null,
-            onScaleStart: _onScaleStart,
-            onScaleUpdate: _onScaleUpdate,
-            onScaleEnd: _onScaleEnd,
-            onLongPressStart: (d) => _startSpeedBoost(d.localPosition.dx),
-            onLongPressEnd: (_) => _endSpeedBoost(),
-            onLongPressCancel: _endSpeedBoost,
+          // The Listener lands the pan's anchor (see [_onPointerDown]):
+          // it reports the pointer's down immediately, before any arena
+          // resolution, which no recognizer on this detector can do.
+          Listener(
+            onPointerDown: _onPointerDown,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: widget.chrome.toggle,
+              onDoubleTapDown: doubleTapEnabled
+                  ? (d) => _doubleTapSeek(d.localPosition.dx)
+                  : null,
+              onScaleStart: _onScaleStart,
+              onScaleUpdate: _onScaleUpdate,
+              onScaleEnd: _onScaleEnd,
+              onLongPressStart: (d) => _startSpeedBoost(d.localPosition.dx),
+              onLongPressEnd: (_) => _endSpeedBoost(),
+              onLongPressCancel: _endSpeedBoost,
+            ),
           ),
+
+        // The volume / brightness rail, while a vertical swipe is down,
+        // then fading on its own clock. Over the video, chrome or not.
+        TransientOverlay<_GoldenRailData>(
+          value: _rail,
+          builder: (context, data) => _GoldenRail(data: data),
+        ),
 
         // Buffering spinner, over the video, chrome or not.
         ValueListenableBuilder<VlcPlayerValue>(
@@ -456,8 +756,10 @@ class _GoldenPlayerControlsState
                           onOpenEpisodes: () =>
                               _openDrawer(_GoldenDrawerKind.episodes),
                           onOpenAudioSources: () => _openDrawer(
-                            _GoldenDrawerKind.audioSources,
+                            _GoldenDrawerKind.audio,
                           ),
+                          onOpenSources: () =>
+                              _openDrawer(_GoldenDrawerKind.sources),
                           onPickSpeed: _pickSpeed,
                           onCycleFit: _cycleFit,
                           onRotate: widget.onRotate,
@@ -530,8 +832,10 @@ class _GoldenPlayerControlsState
                                     _GoldenDrawerKind.subtitleStyle,
                                   ),
                                   onOpenAudioSources: () => _openDrawer(
-                                    _GoldenDrawerKind.audioSources,
+                                    _GoldenDrawerKind.audio,
                                   ),
+                                  onOpenSources: () =>
+                                      _openDrawer(_GoldenDrawerKind.sources),
                                   onPickVolume: _pickVolume,
                                   speed: value.playbackSpeed,
                                   onPickSpeed: _pickSpeed,
@@ -672,13 +976,18 @@ class _GoldenPlayerControlsState
           onSubtitlePicked: widget.onSubtitlePicked,
           subtitleTarget: widget.panelData.value.subtitleTarget,
         );
-      case _GoldenDrawerKind.audioSources:
-        return GoldenAudioSourcesDrawer(
+      case _GoldenDrawerKind.audio:
+        return GoldenAudioDrawer(
           key: ValueKey<_GoldenDrawerKind>(kind),
           controller: widget.controller,
-          panelData: widget.panelData,
           onClose: _closeDrawer,
           onAudioPicked: widget.onAudioPicked,
+        );
+      case _GoldenDrawerKind.sources:
+        return GoldenSourcesDrawer(
+          key: ValueKey<_GoldenDrawerKind>(kind),
+          panelData: widget.panelData,
+          onClose: _closeDrawer,
           onPickSource: (index) {
             _closeDrawer();
             widget.onPickSource(index);
@@ -703,7 +1012,112 @@ class _GoldenPlayerControlsState
       _speedBeforeBoost = null;
       unawaited(widget.controller.setPlaybackSpeed(previous));
     }
+    // Application brightness is a process-wide override, so leaving the
+    // player gives the screen back to the system's level.
+    if (_brightnessOverridden) _brightnessControl.reset();
+    _rail.dispose();
     super.dispose();
+  }
+}
+
+/// What a vertical swipe's rail shows: the icon, the level 0..1 of the
+/// track, the text above it (e.g. `70%`), and which edge it sits on.
+class _GoldenRailData {
+  const _GoldenRailData({
+    required this.icon,
+    required this.value,
+    required this.label,
+    required this.onLeft,
+  });
+
+  final IconData icon;
+  final double value;
+  final String label;
+  final bool onLeft;
+}
+
+/// The vertical volume / brightness rail, shown while a swipe is down.
+///
+/// Kept deliberately dumb: it renders a value someone else owns. The
+/// gesture that changes it, the engine call and the timer that hides it
+/// all live in the controls, so this cannot become a second owner of
+/// player state. Gold fill on a dark pill, to match the Golden chrome;
+/// brightness sits on the left edge, volume on the right.
+class _GoldenRail extends StatelessWidget {
+  const _GoldenRail({required this.data});
+
+  final _GoldenRailData data;
+
+  static const double _trackHeight = 132;
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = data.value.clamp(0.0, 1.0);
+    return Align(
+      alignment: data.onLeft ? Alignment.centerLeft : Alignment.centerRight,
+      child: Padding(
+        // 12 inside the chrome's side inset, which clears a notch or
+        // camera cutout on either side.
+        padding: EdgeInsets.only(
+          left: data.onLeft ? 24 : 0,
+          right: data.onLeft ? 0 : 24,
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.62),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: GoldenPlayerColors.divider),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  data.label,
+                  style: const TextStyle(
+                    color: GoldenPlayerColors.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: 6,
+                  height: _trackHeight,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: Stack(
+                      children: [
+                        const Positioned.fill(
+                          child: ColoredBox(color: Color(0xFF3A352E)),
+                        ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          height: _trackHeight * filled,
+                          child: const ColoredBox(
+                            color: GoldenPlayerColors.gold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Icon(
+                  data.icon,
+                  color: GoldenPlayerColors.goldHighlight,
+                  size: 20,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -779,6 +1193,7 @@ class _TopBar extends StatelessWidget {
     required this.onOpenSubtitleStyle,
     required this.onOpenEpisodes,
     required this.onOpenAudioSources,
+    required this.onOpenSources,
     required this.onPickSpeed,
     required this.onCycleFit,
     required this.onRotate,
@@ -793,6 +1208,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onOpenSubtitleStyle;
   final VoidCallback onOpenEpisodes;
   final VoidCallback onOpenAudioSources;
+  final VoidCallback onOpenSources;
   final VoidCallback onPickSpeed;
   final VoidCallback onCycleFit;
   final VoidCallback? onRotate;
@@ -879,6 +1295,7 @@ class _TopBar extends StatelessWidget {
         if (isSeries) const SizedBox(width: 8),
         _MoreMenu(
           onOpenAudioSources: onOpenAudioSources,
+          onOpenSources: onOpenSources,
           onOpenSubtitleStyle: onOpenSubtitleStyle,
           onPickSpeed: onPickSpeed,
           onCycleFit: onCycleFit,
@@ -889,10 +1306,11 @@ class _TopBar extends StatelessWidget {
   }
 }
 
-/// The More menu: Audio & Sources, Subtitle style, Speed, Aspect, Rotate.
+/// The More menu: Audio, Sources, Subtitle style, Speed, Aspect, Rotate.
 class _MoreMenu extends StatelessWidget {
   const _MoreMenu({
     required this.onOpenAudioSources,
+    required this.onOpenSources,
     required this.onOpenSubtitleStyle,
     required this.onPickSpeed,
     required this.onCycleFit,
@@ -900,6 +1318,7 @@ class _MoreMenu extends StatelessWidget {
   });
 
   final VoidCallback onOpenAudioSources;
+  final VoidCallback onOpenSources;
   final VoidCallback onOpenSubtitleStyle;
   final VoidCallback onPickSpeed;
   final VoidCallback onCycleFit;
@@ -917,6 +1336,8 @@ class _MoreMenu extends StatelessWidget {
         switch (choice) {
           case 'audio':
             onOpenAudioSources();
+          case 'sources':
+            onOpenSources();
           case 'subtitles':
             onOpenSubtitleStyle();
           case 'speed':
@@ -932,7 +1353,14 @@ class _MoreMenu extends StatelessWidget {
           value: 'audio',
           child: _MenuLabel(
             icon: Icons.audiotrack_rounded,
-            text: 'Audio & Sources',
+            text: 'Audio',
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'sources',
+          child: _MenuLabel(
+            icon: Icons.dns_rounded,
+            text: 'Sources',
           ),
         ),
         const PopupMenuItem<String>(
@@ -1093,6 +1521,7 @@ class _BottomBar extends StatelessWidget {
     required this.hasSubtitles,
     required this.onOpenSubtitleStyle,
     required this.onOpenAudioSources,
+    required this.onOpenSources,
     required this.onPickVolume,
     required this.speed,
     required this.onPickSpeed,
@@ -1117,6 +1546,7 @@ class _BottomBar extends StatelessWidget {
   final ValueListenable<bool>? hasSubtitles;
   final VoidCallback onOpenSubtitleStyle;
   final VoidCallback onOpenAudioSources;
+  final VoidCallback onOpenSources;
   final VoidCallback onPickVolume;
   final double speed;
   final VoidCallback onPickSpeed;
@@ -1207,12 +1637,20 @@ class _BottomBar extends StatelessWidget {
               onPressed: onOpenSubtitleStyle,
             ),
             const SizedBox(width: 6),
-            // Audio & Sources, straight from the bottom bar — the same
-            // drawer the top-right More menu opens.
+            // Audio, straight from the bottom bar — the same drawer the
+            // top-right More menu opens. Sources sits beside it, as its
+            // own button and its own drawer.
             GoldenIconButton(
               icon: Icons.audiotrack_rounded,
               onPressed: onOpenAudioSources,
-              tooltip: 'Audio & Sources',
+              tooltip: 'Audio',
+              size: 38,
+            ),
+            const SizedBox(width: 6),
+            GoldenIconButton(
+              icon: Icons.dns_rounded,
+              onPressed: onOpenSources,
+              tooltip: 'Sources',
               size: 38,
             ),
             const SizedBox(width: 6),

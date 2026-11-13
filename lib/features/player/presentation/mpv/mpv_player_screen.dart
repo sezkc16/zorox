@@ -19,7 +19,8 @@
 ///     episode data, gold highlight on the playing row, resume bar),
 ///     Subtitle Style (size, colour, font, bold, background, outline,
 ///     position + nudge, opacity, encoding, reset — all live on mpv),
-///     Audio & Sources (track and source lists);
+///     Audio (track list) and Sources (source list, as separate
+///     drawers);
 ///   * skip-intro/outro chips, the up-next countdown, and the ended card;
 ///   * subtitles that sit low and at full size: media_kit's SubtitleView
 ///     caches its padding at creation and scales text down on phones, so
@@ -921,8 +922,21 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       return;
     }
     if (embedded.isNotEmpty) {
-      unawaited(_player.setSubtitleTrack(embedded.first));
-      _subtitleAppliedFor = _streamIndex;
+      // The engine's list leads with the `auto` and `no` sentinels,
+      // which are not tracks: setting the first of them left the state
+      // on 'auto' while mpv played its pick, so the drawer read "Off"
+      // under a rendering subtitle. The default-flagged track is mpv's
+      // own pick with no language preference set; else the first real
+      // track — and the state is concrete from here on, so the drawer
+      // shows the track that is actually playing.
+      final real = embedded
+          .where((t) => t.id != 'auto' && t.id != 'no')
+          .toList(growable: false);
+      if (real.isNotEmpty) {
+        final def = real.indexWhere((t) => t.isDefault == true);
+        unawaited(_player.setSubtitleTrack(real[def >= 0 ? def : 0]));
+        _subtitleAppliedFor = _streamIndex;
+      }
     }
   }
 
@@ -1179,6 +1193,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         StartupRow(
           label: _startupRowLabel(_streams[i]),
           server: sourceServer(_streams[i]),
+          quality: sourceQualityLabel(_streams[i]),
           reachability: sourceReachabilityOf(
             _streams[i],
             _probes[i],

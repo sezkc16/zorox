@@ -97,6 +97,37 @@ String? sourceServer(StreamResult stream) {
   return first.isEmpty ? null : first;
 }
 
+/// The quality a source row shows as a chip ("4K", "1080p", "720p"): the
+/// plugin's parsed height first, else the label's own "1080p" / "4K" —
+/// the label truncates it away just like the server, and the viewer picks
+/// by quality too. Null when neither names one — no chip, never a guess.
+/// Adaptive (0) offers several heights, so it names none either.
+String? sourceQualityLabel(StreamResult stream) {
+  final height = stream.quality;
+  if (height != null && height > 0) {
+    return height >= 2160 ? '4K' : '${height}p';
+  }
+  final match = _qualityInLabel.firstMatch(stream.source);
+  if (match == null) return null;
+  final found = match
+      .group(1)!
+      .toLowerCase()
+      .replaceAll(RegExp(r'\s+'), '');
+  return switch (found) {
+    '2160p' || '4k' || 'uhd' => '4K',
+    '1440p' || '2k' => '1440p',
+    _ => found, // 1080p, 720p, 480p, 360p
+  };
+}
+
+/// A quality written in a source label: "1080p" in a filename, "4K" on
+/// its own. The word boundary keeps "4KHDHub" (a provider name) from
+/// reading as a 4K stream.
+final RegExp _qualityInLabel = RegExp(
+  r'\b(2160\s*p|4k|uhd|1440\s*p|2k|1080\s*p|720\s*p|480\s*p|360\s*p)\b',
+  caseSensitive: false,
+);
+
 /// What is known about reaching [stream]: the [probe] outcome the check
 /// reported, unless [hasPlayed] - it has shown a picture this resolve, which
 /// is stronger evidence than any request about it.

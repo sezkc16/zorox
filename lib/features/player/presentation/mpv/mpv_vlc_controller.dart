@@ -236,18 +236,33 @@ class MpvVlcController implements VlcPlayerController {
 
   // -- track id mapping -----------------------------------------------------
 
-  List<AudioTrack> get _audioTracks => _player.state.tracks.audio;
+  /// The engine's real tracks: media_kit's lists lead with the `auto` and
+  /// `no` sentinels, which are not tracks a viewer can pick — shown, they
+  /// read as the generic "Audio 1" / "Subtitle 2" rows, and the screen's
+  /// auto-select set `embedded.first` (the `auto` sentinel) instead of the
+  /// first real track, leaving the state on 'auto' while mpv played its
+  /// pick — so the drawer read "Off" under a rendering subtitle.
+  List<AudioTrack> get _audioTracks => _player.state.tracks.audio
+      .where((t) => t.id != 'auto' && t.id != 'no')
+      .toList(growable: false);
   List<SubtitleTrack> get _embeddedSubtitles =>
-      _player.state.tracks.subtitle;
+      _player.state.tracks.subtitle
+          .where((t) => t.id != 'auto' && t.id != 'no')
+          .toList(growable: false);
 
   int? _activeAudioId() {
     final current = _player.state.track.audio;
     if (current.id == 'no') return null;
     if (current.id == 'auto') {
-      // mpv auto-selected: it plays the first/default audio track, so
-      // that is the one the panel must show as selected — otherwise
-      // nothing reads as selected while the video is playing.
-      return _audioTracks.isEmpty ? null : 0;
+      // mpv auto-selected: it plays the default-flagged audio track,
+      // else the first one — the same rule mpv itself uses with no
+      // language preference set. The engine never reports which one it
+      // picked (media_kit does not read the track-list `selected` flag),
+      // so resolve it here, or nothing would read as selected while the
+      // video is playing.
+      if (_audioTracks.isEmpty) return null;
+      final def = _audioTracks.indexWhere((t) => t.isDefault == true);
+      return def >= 0 ? def : 0;
     }
     final index = _audioTracks.indexWhere((t) => t.id == current.id);
     return index < 0 ? null : index;
@@ -255,7 +270,17 @@ class MpvVlcController implements VlcPlayerController {
 
   int? _activeSubtitleId() {
     final current = _player.state.track.subtitle;
-    if (current.id == 'auto' || current.id == 'no') return null;
+    if (current.id == 'no') return null;
+    if (current.id == 'auto') {
+      // mpv auto-selected: it plays the default-flagged subtitle track,
+      // else the first one — the same rule mpv itself uses. The engine
+      // never reports which one it picked, so resolve it here, or the
+      // drawer would read "Off" while a subtitle renders.
+      final embedded = _embeddedSubtitles;
+      if (embedded.isEmpty) return null;
+      final def = embedded.indexWhere((t) => t.isDefault == true);
+      return def >= 0 ? def : 0;
+    }
     // An external file the screen added: mpv reports it under its title.
     final external = _externalSubtitles();
     final externalIndex = external.indexWhere(
@@ -610,7 +635,9 @@ class MpvVlcController implements VlcPlayerController {
           name: _trackDisplayName(
             title: _audioTracks[i].title,
             language: _audioTracks[i].language,
-            fallback: 'Audio ${i + 1}',
+            // A track with no title and no language reads as plain
+            // "Audio" — never "Audio 1" / "Audio 2".
+            fallback: 'Audio',
           ),
           language: _audioTracks[i].language,
           channels: _audioTracks[i].channelscount,
@@ -636,7 +663,9 @@ class MpvVlcController implements VlcPlayerController {
           name: _trackDisplayName(
             title: embedded[i].title,
             language: embedded[i].language,
-            fallback: 'Subtitle ${i + 1}',
+            // A track with no title and no language reads as plain
+            // "Subtitle" — never "Subtitle 1" / "Subtitle 2".
+            fallback: 'Subtitle',
           ),
           language: embedded[i].language,
         ),

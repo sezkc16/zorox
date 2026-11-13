@@ -1,6 +1,6 @@
 /// The right-side sliding drawer shell for the golden player.
 ///
-/// One shell for every drawer — Episodes, Subtitle Style, Audio & Sources —
+/// One shell for every drawer — Episodes, Subtitle Style, Audio, Sources —
 /// so they all slide, fade and dismiss the same way: a dark panel
 /// (#141210) sliding in from the right over a tap-to-dismiss scrim, the
 /// video still visible on the left, subtitles still readable while it is
