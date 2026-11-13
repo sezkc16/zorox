@@ -1194,6 +1194,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
           label: _startupRowLabel(_streams[i]),
           server: sourceServer(_streams[i]),
           quality: sourceQualityLabel(_streams[i]),
+          size: sourceSizeLabel(_streams[i]),
           reachability: sourceReachabilityOf(
             _streams[i],
             _probes[i],

@@ -1053,14 +1053,20 @@ class _GoldenRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final filled = data.value.clamp(0.0, 1.0);
+    // The device's safe-area inset on this side: 59pt on the Dynamic
+    // Island side of an iPhone 15 Pro Max in landscape, 0 where there is
+    // no cutout. The fixed 24 alone put the rail under the island.
+    final safe = MediaQuery.paddingOf(context);
     return Align(
       alignment: data.onLeft ? Alignment.centerLeft : Alignment.centerRight,
       child: Padding(
-        // 12 inside the chrome's side inset, which clears a notch or
-        // camera cutout on either side.
+        // 24 inside the chrome's side inset, plus the safe area — so the
+        // rail sits clear of a notch or camera cutout on either side, on
+        // every device, with no hardcoded phone value. Which side the
+        // island is on flips with rotation, and the padding follows it.
         padding: EdgeInsets.only(
-          left: data.onLeft ? 24 : 0,
-          right: data.onLeft ? 0 : 24,
+          left: data.onLeft ? 24 + safe.left : 0,
+          right: data.onLeft ? 0 : 24 + safe.right,
         ),
         child: DecoratedBox(
           decoration: BoxDecoration(

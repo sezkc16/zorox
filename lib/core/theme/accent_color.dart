@@ -57,6 +57,14 @@ class AccentColor extends _$AccentColor {
     return ZoroxAccent.fromName(_repository.getAccentColor());
   }
 
+  /// Whether the user has ever picked an accent in Settings (any preset,
+  /// Gold included). Until then the saved value is absent — and on Android
+  /// the OS dynamic colour is used instead, so Material You keeps working.
+  /// Picking Gold explicitly IS a choice, not the default: Gold is both
+  /// the fallback and a preset, so the accent state alone cannot tell
+  /// "never chose" from "chose Gold" — only the stored value can.
+  bool get hasExplicitChoice => _repository.getAccentColor() != null;
+
   Future<void> setAccent(ZoroxAccent accent) async {
     if (state == accent) return;
     state = accent;

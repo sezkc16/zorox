@@ -546,12 +546,19 @@ class _MyAppState extends ConsumerState<MyApp> {
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
         // The user's accent wins over the OS dynamic colour once they pick
-        // one; with the default Gold the system colour is left alone, so
-        // Android's Material You keeps working until a choice is made.
-        // (On iOS the dynamic scheme is always null, so the accent is the
-        // seed from the first launch.)
+        // one; until then the system colour is left alone, so Android's
+        // Material You keeps working on a fresh install. The check is
+        // "has the user ever picked", not "is the accent Gold": Gold is
+        // both the fallback and a preset, so picking Gold explicitly used
+        // to read as "never chose" and the wallpaper blue/purple stayed
+        // on Android even with Gold selected in Settings. (On iOS the
+        // dynamic scheme is always null, so the accent is the seed from
+        // the first launch.)
         ColorScheme? darkScheme;
-        if (darkDynamic != null && accent == ZoroxAccent.gold) {
+        final hasExplicitAccent = ref
+            .watch(accentColorProvider.notifier)
+            .hasExplicitChoice;
+        if (darkDynamic != null && !hasExplicitAccent) {
           darkScheme = darkDynamic;
         }
 

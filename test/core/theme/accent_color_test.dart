@@ -81,6 +81,44 @@ void main() {
     });
   });
 
+  // Whether the user has ever picked an accent: Gold is both the fallback
+  // and a preset, so the accent state alone cannot tell "never chose" from
+  // "chose Gold" — only the stored value can. The theme reads this to
+  // decide whether Android's Material You keeps winning.
+  group('whether the user has ever picked one', () {
+    test('is false when nothing is recorded, though the accent reads Gold',
+        () {
+      expect(storage.getAccentColor(), isNull);
+
+      final container = boot();
+      expect(container.read(accentColorProvider), ZoroxAccent.gold);
+      expect(
+        container.read(accentColorProvider.notifier).hasExplicitChoice,
+        isFalse,
+      );
+    });
+
+    test('is true once Gold itself is picked', () async {
+      await storage.saveAccentColor('gold');
+
+      final container = boot();
+      expect(container.read(accentColorProvider), ZoroxAccent.gold);
+      expect(
+        container.read(accentColorProvider.notifier).hasExplicitChoice,
+        isTrue,
+      );
+    });
+
+    test('is true for any other preset too', () async {
+      await storage.saveAccentColor('blue');
+
+      expect(
+        boot().read(accentColorProvider.notifier).hasExplicitChoice,
+        isTrue,
+      );
+    });
+  });
+
   test('a value no release ever wrote falls back to Gold', () async {
     await storage.saveAccentColor('sepia');
 

@@ -6511,6 +6511,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
         for (var i = 0; i < sources.length; i++)
           StartupRow(
             label: sourceRowLabel(sources[i]),
+            size: sourceSizeLabel(sources[i]),
             reachability: sourceReachabilityOf(
               sources[i],
               _probes[i],

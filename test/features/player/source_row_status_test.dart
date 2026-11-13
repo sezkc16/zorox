@@ -136,6 +136,107 @@ void main() {
     });
   });
 
+  // The size the plugin's own label carries ("[16.74 GB]", "850MB",
+  // "1080p - 3.45GB"): shown as a chip, so the viewer can pick by size.
+  // A label with no size shows no chip — never a guess.
+  group('the file size a row names', () {
+    String? size(String source) =>
+        sourceSizeLabel(StreamResult(url: 'u', source: source));
+
+    test('reads a bracketed size', () {
+      expect(size('HubCloud 2160p DV HDR [16.74 GB]'), '16.74 GB');
+      expect(size('HQ 1080p (SOURCE) [32.8GB]'), '32.8 GB');
+    });
+
+    test('reads a bare size, and a size after a dash', () {
+      expect(size('1080p [330MB]'), '330 MB');
+      expect(size('Download 1080p - 3.45GB'), '3.45 GB');
+    });
+
+    test('reads TB and normalises a comma decimal', () {
+      expect(size('Season Pack [1.2 TB]'), '1.2 TB');
+      expect(size('1080p [1,5 GB]'), '1.5 GB');
+    });
+
+    test('is none when the label names no size', () {
+      expect(size('HubCloud 1080p'), isNull);
+      expect(size('G-Direct 720p'), isNull);
+    });
+
+    test('is not a server name or a bitrate', () {
+      expect(size('[Server: 10G] 1080p'), isNull);
+      expect(size('8000 kbps 1080p'), isNull);
+    });
+  });
+
+  // The server a row names: the most specific one wins. A bracketed
+  // "[… Server …]" first, then a known server anywhere in the label, then
+  // the resolved stream URL's host — the plugin stamps "HubCloud …" on
+  // every link it resolves through that chain, even when the file itself
+  // is served by PixelDrain. A leading "Download" or "1080p" is no server.
+  group('the server a row names', () {
+    const r2 = 'https://abc123.r2.cloudflarestorage.com/hub/file.mkv';
+    const pd = 'https://pixeldrain.dev/api/file/abc123';
+
+    String? server({required String source, String url = r2}) =>
+        sourceServer(StreamResult(url: url, source: source));
+
+    test('reads a bracketed server', () {
+      expect(server(source: '[FSLv2 Server] 1080p [3.6GB]'), 'FSLv2');
+      expect(server(source: '[FSL Server] 1080p [3.6GB]'), 'FSL');
+      expect(server(source: '[Server: 10G] 1080p [3.6GB]'), '10G');
+    });
+
+    test('reads a server buried mid-label', () {
+      expect(server(source: '1080p [6.7GB] HubCloud'), 'HubCloud');
+      expect(server(source: 'PixelDrain 1080p [2.1GB]'), 'PixelDrain');
+      expect(server(source: 'G-Direct 1080p [6.6GB]'), 'G-Direct');
+      expect(server(source: 'Watch Online (Videasy)'), 'Videasy');
+    });
+
+    test('tells FSLv2 apart from FSL', () {
+      expect(server(source: 'FSLv2 1080p [3.6GB]'), 'FSLv2');
+      expect(server(source: 'FSL 1080p [3.6GB]'), 'FSL');
+    });
+
+    test('the stream URL beats the HubCloud chain name in the label', () {
+      expect(
+        server(source: 'HubCloud 1080p [4.6GB]', url: pd),
+        'PixelDrain',
+        reason: 'the file is served by PixelDrain, whatever the chain',
+      );
+      expect(
+        server(source: 'HubCloud 2160p DV HDR [16.74 GB]', url: r2),
+        'HubCloud',
+      );
+    });
+
+    test('a leading download word or quality is no server', () {
+      expect(
+        server(source: 'Download (Ep 08) 1080p - 1.34GB', url: r2),
+        'HubCloud',
+        reason: 'the URL still says where the file is',
+      );
+      expect(
+        server(source: '1080p', url: 'https://cdn.example/film.m3u8'),
+        isNull,
+      );
+    });
+
+    test('a hostless URL contributes no server', () {
+      expect(
+        server(source: 'Torrent', url: 'magnet:?xt=urn:btih:abc'),
+        'Torrent',
+        reason: 'the leading word is all there is — unchanged from before',
+      );
+      expect(
+        server(source: '1080p', url: 'magnet:?xt=urn:btih:abc'),
+        isNull,
+        reason: 'a quality is no server, and a magnet has no host',
+      );
+    });
+  });
+
   group('play state', () {
     SourcePlayState play({
       bool isCurrent = false,

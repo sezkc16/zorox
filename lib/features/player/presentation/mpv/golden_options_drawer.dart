@@ -222,8 +222,8 @@ class GoldenSourcesDrawer extends StatelessWidget {
   }
 }
 
-/// One source row: radio + label + quality chip + server chip + probe
-/// status. The chips sit outside the label's [Expanded], so they stay
+/// One source row: radio + label + quality chip + server chip + size chip
+/// + probe status. The chips sit outside the label's [Expanded], so they stay
 /// visible when the label truncates — the label is what ellipsises,
 /// never the chips.
 class _SourceTile extends StatelessWidget {
@@ -253,6 +253,7 @@ class _SourceTile extends StatelessWidget {
     final label = base.trim().isEmpty ? 'Source ${index + 1}' : base;
     final quality = sourceQualityLabel(stream);
     final server = sourceServer(stream);
+    final size = sourceSizeLabel(stream);
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Material(
@@ -329,6 +330,10 @@ class _SourceTile extends StatelessWidget {
                 if (server != null && server.isNotEmpty) ...<Widget>[
                   const SizedBox(width: 6),
                   _Chip(label: server, gold: false),
+                ],
+                if (size != null && size.isNotEmpty) ...<Widget>[
+                  const SizedBox(width: 6),
+                  _Chip(label: size, gold: false),
                 ],
                 if (_statusIcon() != null) ...<Widget>[
                   const SizedBox(width: 8),

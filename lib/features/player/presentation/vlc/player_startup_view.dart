@@ -31,7 +31,10 @@ import 'panel/player_panel_labels.dart'
 /// names no server, which leaves the row exactly as it was. The quality
 /// ("4K", "1080p") is a fourth fact, shown as a gold chip beside the
 /// server's: the label truncates it away too, and the viewer picks by
-/// quality as well. Null where the source names no quality.
+/// quality as well. Null where the source names no quality. The file size
+/// ("16.74 GB", "850 MB") is a fifth fact, shown as a chip beside the
+/// server's: the label truncates it away too, and the viewer picks by size
+/// as well. Null where the source names no size.
 @immutable
 class StartupRow {
   const StartupRow({
@@ -40,6 +43,7 @@ class StartupRow {
     this.playState = SourcePlayState.untried,
     this.server,
     this.quality,
+    this.size,
   });
 
   final String label;
@@ -47,6 +51,7 @@ class StartupRow {
   final SourcePlayState playState;
   final String? server;
   final String? quality;
+  final String? size;
 
   @override
   bool operator ==(Object other) =>
@@ -55,11 +60,12 @@ class StartupRow {
       other.reachability == reachability &&
       other.playState == playState &&
       other.server == server &&
-      other.quality == quality;
+      other.quality == quality &&
+      other.size == size;
 
   @override
   int get hashCode =>
-      Object.hash(label, reachability, playState, server, quality);
+      Object.hash(label, reachability, playState, server, quality, size);
 }
 
 class PlayerStartupView extends StatefulWidget {
@@ -765,6 +771,36 @@ class _SourceRow extends StatelessWidget {
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                         ),
+                      ),
+                    ),
+                  ),
+                ],
+                // The file size, as a chip beside the server's: the label
+                // truncates it away too, and the viewer picks by size.
+                // Absent where the source names no size.
+                if (row.size != null && row.size!.isNotEmpty) ...[
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: Text(
+                      row.size!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
