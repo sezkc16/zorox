@@ -148,6 +148,24 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   List<StreamResult> _streams = const [];
   int _streamIndex = 0;
   final Set<int> _failedStreams = <int>{};
+
+  /// What the reachability check found per source, while resolving: the
+  /// original SkyStream's rows read "Checking…" (spinner) while a source is
+  /// probed, then a green check when it answers — the viewer watches the
+  /// sources resolve and picks one before anything plays. mpv used to mark
+  /// every row `notChecked` (blank), so the list said nothing and flashed
+  /// past. Fed by `resolvePlayback`'s `onProbe`, cleared per resolve.
+  final Map<int, ProbeOutcome> _probes = <int, ProbeOutcome>{};
+
+  /// The row the viewer picked during the probe race, if any. A pick during
+  /// the race must not be overruled when the resolve returns: the resolver's
+  /// index is only the auto-pick, and the viewer's pick is already opening.
+  int? _pickedIndex;
+
+  /// True once this resolve has returned its streams and index. Before that
+  /// (the probe race) no row is "being opened", so no row reads "Opening…" —
+  /// the original leaves every playState blank until the first open starts.
+  bool _resolveDone = false;
   StreamResult? get _selected =>
       _streams.isEmpty ? null : _streams[_streamIndex];
 
@@ -595,12 +613,34 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   Future<void> _resolveAndOpen() async {
     if (_disposed) return;
+    // A fresh resolve: no probes yet, no pick, no row "being opened".
+    _probes.clear();
+    _pickedIndex = null;
+    _resolveDone = false;
     try {
       final resolved = await resolvePlayback(
         read: ref.read,
         item: widget.item,
         videoUrl: _currentVideoUrl,
         preloadedStreams: widget.preloadedStreams,
+        // The original's list appears as soon as the candidates arrive and
+        // its rows update live as each source is probed — the viewer watches
+        // the sources resolve and picks one before anything plays. mpv used
+        // to pass neither callback, so the list only appeared AFTER the
+        // whole resolve (probe race included) had returned, and every row
+        // read blank. Now the candidates land early and each probe answer
+        // rebuilds the list, exactly as the stock screen narrates them.
+        onCandidates: (streams) {
+          if (_disposed) return;
+          _streams = streams;
+          _publishPanelData();
+          if (mounted) setState(() {});
+        },
+        onProbe: (index, outcome) {
+          if (_disposed) return;
+          _probes[index] = outcome;
+          if (mounted) setState(() {});
+        },
       );
       final resume = await resolveResumePoint(
         read: ref.read,
@@ -610,6 +650,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       );
       if (_disposed) return;
       _streams = resolved.streams;
+      _resolveDone = true;
+      // The viewer picked a row during the probe race: it is already
+      // opening (see _pickFromStartup), so do not overrule it with the
+      // resolver's auto-pick and do not open a second source. Without
+      // this the assignment below would overwrite the pick.
+      if (_pickedIndex != null) return;
       _streamIndex = resolved.index;
       _resumePosition = resume?.position ?? Duration.zero;
       // Only a real livestream is LIVE; an HLS VOD reports its duration once
@@ -746,10 +792,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// A row picked on the startup list, before anything is playing: open
   /// that source instead of the one the auto-open chose. The list stays up
   /// until the picked source plays, so a pick that fails falls over to the
-  /// next one the same way.
+  /// next one the same way. The pick is remembered so a resolve still
+  /// running cannot overrule it when it returns (see _resolveAndOpen).
   void _pickFromStartup(int index) {
     if (_disposed || index < 0 || index >= _streams.length) return;
     if (index == _streamIndex && !_startedPlaying) return;
+    _pickedIndex = index;
     unawaited(_openStream(index, start: _position));
   }
 
@@ -934,6 +982,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _streams = const [];
     _streamIndex = 0;
     _failedStreams.clear();
+    _probes.clear();
+    _pickedIndex = null;
+    _resolveDone = false;
     _startedPlaying = false;
     _subtitleAppliedFor = -1;
     _rememberedAudioId = null;
@@ -1030,19 +1081,40 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     return 'S${episode.season} E${episode.episode} · ${episode.name}';
   }
 
+  /// The startup list's current row: the one being opened, or null while
+  /// the probe race is still running (the original shows no row as current
+  /// until the first open starts, unless the viewer picked one).
+  int? get _startupCurrentIndex {
+    if (_streams.isEmpty) return null;
+    if (!_resolveDone && _pickedIndex == null) return null;
+    return _streamIndex;
+  }
+
+  /// The startup list's rows, in the original's own terms: a source's
+  /// reachability is what the probe race found for it — Checking… (spinner)
+  /// while it is probed, a green check when it answers, Failed when it
+  /// does not — and its playState is whether it is the one being opened or
+  /// is already playing. The original's rows read this way because the
+  /// stock screen feeds `resolvePlayback`'s `onProbe` into these same
+  /// helpers; mpv now does too. Before the resolve returns (the probe
+  /// race) no row is "being opened", so every playState is blank — the
+  /// original leaves them blank until the first open starts.
   List<StartupRow> get _startupRows {
     return <StartupRow>[
       for (var i = 0; i < _streams.length; i++)
         StartupRow(
           label: _startupRowLabel(_streams[i]),
-          reachability: SourceReachability.notChecked,
-          playState: _failedStreams.contains(i)
-              ? SourcePlayState.failed
-              : i == _streamIndex
-                  ? (_startedPlaying
-                        ? SourcePlayState.playing
-                        : SourcePlayState.opening)
-                  : SourcePlayState.untried,
+          reachability: sourceReachabilityOf(
+            _streams[i],
+            _probes[i],
+            hasPlayed: _startedPlaying && i == _streamIndex,
+          ),
+          playState: sourcePlayStateOf(
+            isCurrent:
+                i == _streamIndex && (_resolveDone || _pickedIndex == i),
+            hasPicture: _startedPlaying,
+            failed: _failedStreams.contains(i),
+          ),
         ),
     ];
   }
@@ -1200,7 +1272,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                   ? null
                   : (index: _streamIndex + 1, total: _streams.length),
               rows: _startupRows,
-              currentIndex: _streams.isEmpty ? null : _streamIndex,
+              currentIndex: _startupCurrentIndex,
               onPick: _pickFromStartup,
               onBack: _goBack,
               isTv: isTv,

@@ -18,7 +18,6 @@ import '../../domain/source_row_status.dart';
 import '../vlc/panel/player_panel_data.dart';
 import 'golden_drawer.dart';
 import 'golden_player_theme.dart';
-import 'golden_track_label.dart';
 
 class GoldenAudioSourcesDrawer extends StatefulWidget {
   const GoldenAudioSourcesDrawer({
@@ -120,11 +119,11 @@ class _GoldenAudioSourcesDrawerState
               else
                 for (final track in _audioTracks)
                   _OptionTile(
-                    // The language in the main label ("1VegaMovies.tw -
-                    // [Hindi]", "Hindi" for a bare "Audio 1"), so the
-                    // viewer can tell which audio it is at a glance.
-                    label: goldenTrackLabel(track.name, track.language),
-                    detail: goldenChannelName(track.channels),
+                    // The adapter already folds the language into the name
+                    // ('MoviesDrives.bid - [English]'), so it is used as-is
+                    // — folding it again here would read it twice.
+                    label: track.name,
+                    detail: _channelName(track.channels),
                     selected:
                         track.id ==
                         widget.controller.value.activeAudioTrackId,
@@ -166,6 +165,16 @@ class _GoldenAudioSourcesDrawerState
     await widget.controller.setAudioTrack(track.id);
     widget.onAudioPicked?.call(track);
   }
+
+  /// The channel count as the original shows it ("5.1", "Stereo", "Mono").
+  String? _channelName(int? channels) => switch (channels) {
+    null || <= 0 => null,
+    1 => 'Mono',
+    2 => 'Stereo',
+    6 => '5.1',
+    8 => '7.1',
+    final int other => '$other ch',
+  };
 
   /// The plugin's own label for the source, led by its provider, with the
   /// quality after it — "HubCloud · 1080p". A source the plugin did not
