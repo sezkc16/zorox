@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/addons/data/addon_client.dart';
+import '../../../core/widgets/app_snack_bar.dart';
 import '../../../core/addons/data/addon_repository.dart';
 import '../../../core/addons/models/addon_manifest.dart';
 import '../../../core/addons/models/addon_meta.dart';
@@ -772,11 +773,17 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
           .read(addonRepositoryProvider.notifier)
           .install(entry.transportUrl);
       messenger.showSnackBar(
-        SnackBar(content: Text('Installed ${entry.manifest.name}')),
+        appSnackBar(
+          content: Text('Installed ${entry.manifest.name}'),
+          duration: const Duration(milliseconds: 1500),
+        ),
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Install failed: $error')),
+        appSnackBar(
+          content: Text('Install failed: $error'),
+          duration: const Duration(milliseconds: 1500),
+        ),
       );
     }
   }
@@ -801,7 +808,8 @@ class _DiscoverTabState extends ConsumerState<_DiscoverTab> {
           return _DiscoverProblem(
             icon: Icons.travel_explore_rounded,
             title: 'Directory unavailable',
-            message: 'You can still paste a manifest URL in the "My add-ons" '
+            message:
+                'You can still paste a manifest URL in the "My add-ons" '
                 'tab.',
             onRetry: _refresh,
           );
@@ -906,8 +914,7 @@ class _CommunityAddonTile extends StatelessWidget {
     required this.onInstall,
   });
 
-  bool get _needsSetup =>
-      entry.manifest.behaviorHints.configurationRequired;
+  bool get _needsSetup => entry.manifest.behaviorHints.configurationRequired;
 
   String get _configureUrl {
     final base = AddonTransport.baseUrl(entry.transportUrl);
@@ -938,8 +945,7 @@ class _CommunityAddonTile extends StatelessWidget {
                   height: 38,
                   fit: BoxFit.cover,
                   memCacheWidth: 96,
-                  errorWidget: (_, _, _) =>
-                      const Icon(Icons.extension_rounded),
+                  errorWidget: (_, _, _) => const Icon(Icons.extension_rounded),
                 ),
               )
             : const Icon(Icons.extension_rounded),

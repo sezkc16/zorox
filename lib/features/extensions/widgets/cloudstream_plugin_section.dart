@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/cloudstream/cloudstream_models.dart';
+import '../../../core/widgets/app_snack_bar.dart';
 import '../../../core/cloudstream/cloudstream_repository.dart';
 import '../../../core/utils/layout_constants.dart';
 import '../../../l10n/generated/app_localizations.dart';
@@ -73,14 +74,12 @@ class CloudStreamRepositoriesSection extends ConsumerWidget {
         final failure = await notifier.refreshRepository(url);
         if (failure != null) {
           messenger.showSnackBar(
-            SnackBar(
-              content: Text(l10n.cloudStreamCouldNotAdd(failure)),
-            ),
+            appSnackBar(content: Text(l10n.cloudStreamCouldNotAdd(failure))),
           );
           return;
         }
         messenger.showSnackBar(
-          SnackBar(
+          appSnackBar(
             content: Text(
               l10n.cloudStreamRepositoryAdded(
                 existing.plugins.length,
@@ -93,7 +92,7 @@ class CloudStreamRepositoriesSection extends ConsumerWidget {
       }
       final repo = await notifier.addRepository(input);
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             l10n.cloudStreamRepositoryAdded(repo.plugins.length, repo.name),
           ),
@@ -101,7 +100,7 @@ class CloudStreamRepositoriesSection extends ConsumerWidget {
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             l10n.cloudStreamCouldNotAdd(
               CloudStreamRepository.errorMessage(error),
@@ -198,11 +197,7 @@ class RepositoryGroupHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(
-            icon,
-            color: Theme.of(context).colorScheme.primary,
-            size: 22,
-          ),
+          Icon(icon, color: Theme.of(context).colorScheme.primary, size: 22),
           const SizedBox(width: LayoutConstants.spacingSm),
           Text(
             label,
@@ -325,7 +320,7 @@ class _CloudStreamRepositoryCard extends ConsumerWidget {
           .removeRepository(repo.url);
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             l10n.cloudStreamCouldNotRemove(
               displayName,
@@ -348,7 +343,7 @@ class _CloudStreamRepositoryCard extends ConsumerWidget {
         .refreshRepository(repo.url);
     if (failure != null) {
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             l10n.cloudStreamCouldNotCheckRepository(displayName, failure),
           ),
@@ -461,9 +456,7 @@ class _CloudStreamPluginTile extends ConsumerWidget {
     final newer = installed == null
         ? null
         : ref.watch(
-            cloudStreamRepositoryProvider.select(
-              (s) => s.updateFor(installed),
-            ),
+            cloudStreamRepositoryProvider.select((s) => s.updateFor(installed)),
           );
     // Switched off, CloudStream loads no extension: what would load one waits for the switch (Uninstall doesn't).
     final on = ref.watch(
@@ -614,13 +607,19 @@ class _CloudStreamPluginTile extends ConsumerWidget {
     final l10n = AppLocalizations.of(context)!;
     try {
       await action();
-      messenger.showSnackBar(SnackBar(content: Text(done)));
+      messenger.showSnackBar(
+        appSnackBar(
+          content: Text(done),
+          duration: const Duration(milliseconds: 1500),
+        ),
+      );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             l10n.cloudStreamFailed(CloudStreamRepository.errorMessage(error)),
           ),
+          duration: const Duration(milliseconds: 1500),
         ),
       );
     }
@@ -639,20 +638,22 @@ class _CloudStreamPluginTile extends ConsumerWidget {
       final installed = await action();
       final error = installed.loadError;
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             error == null
                 ? done(info.name)
                 : l10n.cloudStreamInstalledNotLoading(info.name, error),
           ),
+          duration: const Duration(milliseconds: 1500),
         ),
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             l10n.cloudStreamFailed(CloudStreamRepository.errorMessage(error)),
           ),
+          duration: const Duration(milliseconds: 1500),
         ),
       );
     }
@@ -682,9 +683,8 @@ class _PluginIcon extends StatelessWidget {
       ),
       child: Text(
         name.isEmpty ? '?' : name.substring(0, 1).toUpperCase(),
-        style: Theme.of(
-          context,
-        ).textTheme.titleSmall?.copyWith(color: cs.primary, fontWeight: FontWeight.bold),
+        style: Theme.of(context).textTheme.titleSmall
+            ?.copyWith(color: cs.primary, fontWeight: FontWeight.bold),
       ),
     );
     final icon = url;
@@ -720,11 +720,8 @@ class _Chip extends StatelessWidget {
     ),
     child: Text(
       text,
-      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-        color: color,
-        fontSize: 10,
-        fontWeight: FontWeight.w600,
-      ),
+      style: Theme.of(context).textTheme.labelSmall
+          ?.copyWith(color: color, fontSize: 10, fontWeight: FontWeight.w600),
     ),
   );
 }

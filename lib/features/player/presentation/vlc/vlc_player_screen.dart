@@ -18,6 +18,7 @@ import 'package:vlc_player/vlc_player.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../../../core/addons/models/addon_meta.dart' show kAddonItemSource;
+import '../../../../core/widgets/app_snack_bar.dart';
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/network/clearance/clearance.dart';
 import '../../../../core/network/dio_client_provider.dart';
@@ -857,8 +858,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
   /// Recomputes [_hasSubtitles] from the two lists that feed it: the files
   /// the source shipped, and the embedded tracks the engine has published.
   void _updateHasSubtitles() {
-    _hasSubtitles.value =
-        _sideCars.tracks.isNotEmpty || _hasEmbeddedSubtitles;
+    _hasSubtitles.value = _sideCars.tracks.isNotEmpty || _hasEmbeddedSubtitles;
   }
 
   /// Re-reads the engine's subtitle list when it has moved, and only then:
@@ -872,11 +872,14 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     _embeddedCheckedRevision = value.trackRevision;
     final generation = _generation;
     unawaited(
-      _controller.getSubtitleTracks().then((tracks) {
-        if (_disposed || generation != _generation) return;
-        _hasEmbeddedSubtitles = tracks.isNotEmpty;
-        _updateHasSubtitles();
-      }).catchError((Object _) {}),
+      _controller
+          .getSubtitleTracks()
+          .then((tracks) {
+            if (_disposed || generation != _generation) return;
+            _hasEmbeddedSubtitles = tracks.isNotEmpty;
+            _updateHasSubtitles();
+          })
+          .catchError((Object _) {}),
     );
   }
 
@@ -1649,7 +1652,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     } catch (e) {
       // An extension's own full-screen screen (a game) took the Play and left
       // nothing to play: back to the title, with nothing said.
-      if (e is StreamResolutionException && e.failure == StreamResolutionFailure.extensionScreen) {
+      if (e is StreamResolutionException &&
+          e.failure == StreamResolutionFailure.extensionScreen) {
         if (mounted && !_disposed) _leaveWhenOnTop();
         return;
       }
@@ -3851,9 +3855,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // Numbering only where the plugin actually populated it; a great many hand
     // back zeroes, and `S0 E0` is worse than nothing.
     if (episode.season > 0 && episode.episode > 0) {
-      parts.add(
-        l10n.playerSeasonEpisode(episode.season, episode.episode),
-      );
+      parts.add(l10n.playerSeasonEpisode(episode.season, episode.episode));
     }
     final name = episode.name.trim();
     // Dropped when it is the numbering again under another name, which is what
@@ -3990,8 +3992,10 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
       final box = context.findRenderObject();
       if (box is! RenderBox || !box.hasSize || box.size.isEmpty) return null;
       final transform = box.getTransformTo(null);
-      final widgetRect =
-          MatrixUtils.transformRect(transform, Offset.zero & box.size);
+      final widgetRect = MatrixUtils.transformRect(
+        transform,
+        Offset.zero & box.size,
+      );
       if (widgetRect.isEmpty) return null;
       final videoSize =
           _controller.value.displayVideoSize ?? _controller.value.videoSize;
@@ -4813,7 +4817,8 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // that follows reads as a pause nobody asked for. So the baseline moves
     // only on the transition into a run, and a run already under way leaves
     // it alone (v17).
-    final isRunning = value.state == VlcPlaybackState.playing ||
+    final isRunning =
+        value.state == VlcPlaybackState.playing ||
         value.state == VlcPlaybackState.buffering;
     if (isRunning && !_wasRunning) {
       _pauseRequestsWhenRunning = _controller.pauseRequests;
@@ -5408,11 +5413,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
     // maybeOf: a player that cannot find a messenger should still play, not
     // throw on the way past a failed source.
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 4),
-      ),
+      appSnackBar(content: Text(message), duration: const Duration(seconds: 4)),
     );
   }
 
@@ -6234,8 +6235,7 @@ class _VlcPlayerScreenState extends ConsumerState<VlcPlayerScreen>
                   // The delay a live stream opens at, not a fallback
                   // reopen's own: that one is the distance it went back.
                   liveDelay: Duration(
-                    milliseconds:
-                        PlayerDiagnostics.liveDelayMs ?? kLiveDelayMs,
+                    milliseconds: PlayerDiagnostics.liveDelayMs ?? kLiveDelayMs,
                   ),
                   onLiveSeek: _seekInLiveWindow,
                   onGoLive: _goLive,

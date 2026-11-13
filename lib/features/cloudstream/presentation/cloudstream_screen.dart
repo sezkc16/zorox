@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/cloudstream/cloudstream_engine.dart';
+import '../../../core/widgets/app_snack_bar.dart';
 import '../../../core/cloudstream/cloudstream_models.dart';
 import '../../../core/cloudstream/cloudstream_repository.dart';
 import '../../../core/logger/app_logger.dart';
@@ -57,7 +58,11 @@ class CloudStreamScreen extends ConsumerWidget {
               child: const Column(
                 children: [
                   _Header(),
-                  Expanded(child: TabBarView(children: [_InstalledTab(), _RepositoriesTab()])),
+                  Expanded(
+                    child: TabBarView(
+                      children: [_InstalledTab(), _RepositoriesTab()],
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -95,12 +100,28 @@ class _HeaderState extends ConsumerState<_Header> {
     if (url == null || url.isEmpty) return;
     setState(() => _adding = true);
     try {
-      final repo = await ref.read(cloudStreamRepositoryProvider.notifier).addRepository(url);
-      messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamRepositoryAdded(repo.plugins.length, repo.name))));
+      final repo = await ref
+          .read(cloudStreamRepositoryProvider.notifier)
+          .addRepository(url);
+      messenger.showSnackBar(
+        appSnackBar(
+          content: Text(
+            l10n.cloudStreamRepositoryAdded(repo.plugins.length, repo.name),
+          ),
+        ),
+      );
       if (mounted) DefaultTabController.of(context).animateTo(1);
     } catch (error, stack) {
       talker.error('[CloudStream] adding repository $url failed', error, stack);
-      messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamCouldNotAdd(CloudStreamRepository.errorMessage(error)))));
+      messenger.showSnackBar(
+        appSnackBar(
+          content: Text(
+            l10n.cloudStreamCouldNotAdd(
+              CloudStreamRepository.errorMessage(error),
+            ),
+          ),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _adding = false);
     }
@@ -111,15 +132,23 @@ class _HeaderState extends ConsumerState<_Header> {
     final l10n = AppLocalizations.of(context)!;
     setState(() => _refreshing = true);
     try {
-      final failed = await ref.read(cloudStreamRepositoryProvider.notifier).refreshAll();
+      final failed = await ref
+          .read(cloudStreamRepositoryProvider.notifier)
+          .refreshAll();
       final state = ref.read(cloudStreamRepositoryProvider);
-      final updates = state.installed.where((p) => state.updateFor(p) != null).length;
+      final updates = state.installed
+          .where((p) => state.updateFor(p) != null)
+          .length;
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             [
-              if (updates == 0) l10n.cloudStreamUpToDate else l10n.cloudStreamUpdatesAvailable(updates),
-              if (failed.isNotEmpty) l10n.cloudStreamCouldNotCheck(failed.join(', ')),
+              if (updates == 0)
+                l10n.cloudStreamUpToDate
+              else
+                l10n.cloudStreamUpdatesAvailable(updates),
+              if (failed.isNotEmpty)
+                l10n.cloudStreamCouldNotCheck(failed.join(', ')),
             ].join(' · '),
           ),
         ),
@@ -135,7 +164,9 @@ class _HeaderState extends ConsumerState<_Header> {
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final updates = state.installed.where((p) => state.updateFor(p) != null).length;
+    final updates = state.installed
+        .where((p) => state.updateFor(p) != null)
+        .length;
 
     return Card(
       margin: const EdgeInsets.fromLTRB(
@@ -159,7 +190,11 @@ class _HeaderState extends ConsumerState<_Header> {
                     color: cs.tertiaryContainer,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(Icons.cloud_rounded, color: cs.onTertiaryContainer, size: 22),
+                  child: Icon(
+                    Icons.cloud_rounded,
+                    color: cs.onTertiaryContainer,
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: LayoutConstants.spacingSm),
                 Expanded(
@@ -168,12 +203,19 @@ class _HeaderState extends ConsumerState<_Header> {
                     children: [
                       Text(
                         l10n.cloudStream,
-                        style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold, color: cs.primary),
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                          color: cs.primary,
+                        ),
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        state.enabled ? l10n.cloudStreamOn : l10n.cloudStreamOff,
-                        style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                        state.enabled
+                            ? l10n.cloudStreamOn
+                            : l10n.cloudStreamOff,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ),
@@ -185,7 +227,11 @@ class _HeaderState extends ConsumerState<_Header> {
                   child: CustomSwitch(
                     key: const ValueKey('cs3_cloudstream_switch'),
                     value: state.enabled,
-                    onChanged: (value) => unawaited(ref.read(cloudStreamRepositoryProvider.notifier).setEnabled(value)),
+                    onChanged: (value) => unawaited(
+                      ref
+                          .read(cloudStreamRepositoryProvider.notifier)
+                          .setEnabled(value),
+                    ),
                   ),
                 ),
               ],
@@ -201,19 +247,29 @@ class _HeaderState extends ConsumerState<_Header> {
                   if (state.repositories.isNotEmpty)
                     CustomButton(
                       isOutlined: true,
-                      onPressed: _refreshing ? null : () => unawaited(_refresh()),
+                      onPressed: _refreshing
+                          ? null
+                          : () => unawaited(_refresh()),
                       child: _ButtonLabel(
                         busy: _refreshing,
                         icon: Icons.refresh_rounded,
                         text: _refreshing
                             ? l10n.cloudStreamChecking
-                            : (updates > 0 ? l10n.cloudStreamCheckUpdatesCount(updates) : l10n.cloudStreamCheckUpdates),
+                            : (updates > 0
+                                  ? l10n.cloudStreamCheckUpdatesCount(updates)
+                                  : l10n.cloudStreamCheckUpdates),
                       ),
                     ),
                   CustomButton(
                     isPrimary: true,
-                    onPressed: _adding ? null : () => unawaited(_addRepository()),
-                    child: _ButtonLabel(busy: _adding, icon: Icons.add_circle_outline, text: l10n.addRepository),
+                    onPressed: _adding
+                        ? null
+                        : () => unawaited(_addRepository()),
+                    child: _ButtonLabel(
+                      busy: _adding,
+                      icon: Icons.add_circle_outline,
+                      text: l10n.addRepository,
+                    ),
                   ),
                 ],
               ),
@@ -226,7 +282,11 @@ class _HeaderState extends ConsumerState<_Header> {
 }
 
 class _ButtonLabel extends StatelessWidget {
-  const _ButtonLabel({required this.busy, required this.icon, required this.text});
+  const _ButtonLabel({
+    required this.busy,
+    required this.icon,
+    required this.text,
+  });
 
   final bool busy;
   final IconData icon;
@@ -240,7 +300,9 @@ class _ButtonLabel extends StatelessWidget {
         const SizedBox(
           width: 16,
           height: 16,
-          child: AppLoadingIndicator(constraints: BoxConstraints(maxWidth: 16, maxHeight: 16)),
+          child: AppLoadingIndicator(
+            constraints: BoxConstraints(maxWidth: 16, maxHeight: 16),
+          ),
         )
       else
         Icon(icon, size: 18),
@@ -278,7 +340,9 @@ class _InstalledTabState extends ConsumerState<_InstalledTab> {
       );
     }
     return ListView.separated(
-      padding: EdgeInsets.only(bottom: LayoutConstants.shellBottomContentPadding(context)),
+      padding: EdgeInsets.only(
+        bottom: LayoutConstants.shellBottomContentPadding(context),
+      ),
       itemCount: state.installed.length,
       separatorBuilder: (_, _) => const Divider(height: 1, indent: 72),
       itemBuilder: (context, index) {
@@ -305,8 +369,12 @@ class _RepositoriesTab extends ConsumerWidget {
       );
     }
     return ListView(
-      padding: EdgeInsets.only(bottom: LayoutConstants.shellBottomContentPadding(context)),
-      children: [for (final repo in state.repositories) _RepositoryCard(repo: repo)],
+      padding: EdgeInsets.only(
+        bottom: LayoutConstants.shellBottomContentPadding(context),
+      ),
+      children: [
+        for (final repo in state.repositories) _RepositoryCard(repo: repo),
+      ],
     );
   }
 }
@@ -324,18 +392,33 @@ class _RepositoryCard extends ConsumerWidget {
         title: Text(l10n.removeRepoConfirm(repo.name)),
         content: Text(l10n.removeRepoWarning),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: Text(l10n.cancel)),
-          TextButton(onPressed: () => Navigator.pop(dialogContext, true), child: Text(l10n.cloudStreamRemove)),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(l10n.cancel),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(l10n.cloudStreamRemove),
+          ),
         ],
       ),
     );
     if (remove != true || !context.mounted) return;
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await ref.read(cloudStreamRepositoryProvider.notifier).removeRepository(repo.url);
+      await ref
+          .read(cloudStreamRepositoryProvider.notifier)
+          .removeRepository(repo.url);
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text(l10n.cloudStreamCouldNotRemove(repo.name, CloudStreamRepository.errorMessage(error)))),
+        appSnackBar(
+          content: Text(
+            l10n.cloudStreamCouldNotRemove(
+              repo.name,
+              CloudStreamRepository.errorMessage(error),
+            ),
+          ),
+        ),
       );
     }
   }
@@ -343,9 +426,17 @@ class _RepositoryCard extends ConsumerWidget {
   Future<void> _refresh(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
     final l10n = AppLocalizations.of(context)!;
-    final failure = await ref.read(cloudStreamRepositoryProvider.notifier).refreshRepository(repo.url);
+    final failure = await ref
+        .read(cloudStreamRepositoryProvider.notifier)
+        .refreshRepository(repo.url);
     if (failure != null) {
-      messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamCouldNotCheckRepository(repo.name, failure))));
+      messenger.showSnackBar(
+        appSnackBar(
+          content: Text(
+            l10n.cloudStreamCouldNotCheckRepository(repo.name, failure),
+          ),
+        ),
+      );
     }
   }
 
@@ -354,11 +445,16 @@ class _RepositoryCard extends ConsumerWidget {
     final state = ref.watch(cloudStreamRepositoryProvider);
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    final installedCount = repo.plugins.where((p) => state.installedFor(p) != null).length;
+    final installedCount = repo.plugins
+        .where((p) => state.installedFor(p) != null)
+        .length;
     final l10n = AppLocalizations.of(context)!;
 
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: LayoutConstants.spacingMd, vertical: LayoutConstants.spacingXs),
+      margin: const EdgeInsets.symmetric(
+        horizontal: LayoutConstants.spacingMd,
+        vertical: LayoutConstants.spacingXs,
+      ),
       clipBehavior: Clip.antiAlias,
       child: ExpansionTile(
         key: PageStorageKey('cs3_repo_${repo.url}'),
@@ -367,25 +463,37 @@ class _RepositoryCard extends ConsumerWidget {
         initiallyExpanded: repo.plugins.length <= 12,
         title: Text(
           repo.name,
-          style: theme.textTheme.titleMedium?.copyWith(color: cs.primary, fontWeight: FontWeight.bold),
+          style: theme.textTheme.titleMedium?.copyWith(
+            color: cs.primary,
+            fontWeight: FontWeight.bold,
+          ),
           overflow: TextOverflow.ellipsis,
         ),
         subtitle: Text(
           [
-            l10n.cloudStreamRepositorySummary(repo.plugins.length, installedCount),
+            l10n.cloudStreamRepositorySummary(
+              repo.plugins.length,
+              installedCount,
+            ),
             if (repo.error != null) l10n.cloudStreamLastCheckFailed,
           ].join(' · '),
-          style: theme.textTheme.bodySmall?.copyWith(color: repo.error != null ? cs.error : cs.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: repo.error != null ? cs.error : cs.onSurfaceVariant,
+          ),
         ),
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: LayoutConstants.spacingSm),
+            padding: const EdgeInsets.symmetric(
+              horizontal: LayoutConstants.spacingSm,
+            ),
             child: Row(
               children: [
                 Expanded(
                   child: Text(
                     repo.url,
-                    style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -422,15 +530,28 @@ class _PluginTile extends ConsumerWidget {
     final installed = this.installed;
     final key = CloudStreamRepository.keyOf(info);
     // Only what this tile shows: a repository's tiles otherwise all rebuild on every change.
-    final busy = ref.watch(cloudStreamRepositoryProvider.select((s) => s.busy.contains(key)));
-    final applying = ref.watch(cloudStreamRepositoryProvider.select((s) => s.applying.contains(key)));
+    final busy = ref.watch(
+      cloudStreamRepositoryProvider.select((s) => s.busy.contains(key)),
+    );
+    final applying = ref.watch(
+      cloudStreamRepositoryProvider.select((s) => s.applying.contains(key)),
+    );
     final newer = installed == null
         ? null
-        : ref.watch(cloudStreamRepositoryProvider.select((s) => s.updateFor(installed)));
+        : ref.watch(
+            cloudStreamRepositoryProvider.select((s) => s.updateFor(installed)),
+          );
     final hasPopups =
-        installed != null && ref.watch(cloudStreamRepositoryProvider.select((s) => s.popupsFor(installed).isNotEmpty));
+        installed != null &&
+        ref.watch(
+          cloudStreamRepositoryProvider.select(
+            (s) => s.popupsFor(installed).isNotEmpty,
+          ),
+        );
     // Switched off, CloudStream loads no extension: what would load one waits for the switch (Uninstall doesn't).
-    final on = ref.watch(cloudStreamRepositoryProvider.select((s) => s.enabled));
+    final on = ref.watch(
+      cloudStreamRepositoryProvider.select((s) => s.enabled),
+    );
     final notifier = ref.read(cloudStreamRepositoryProvider.notifier);
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
@@ -444,7 +565,8 @@ class _PluginTile extends ConsumerWidget {
 
     final details = [
       if (info.tvTypes.isNotEmpty) info.tvTypes.take(3).join(' / '),
-      if (info.language != null && info.language!.isNotEmpty) info.language!.toUpperCase(),
+      if (info.language != null && info.language!.isNotEmpty)
+        info.language!.toUpperCase(),
       if (info.authors.isNotEmpty) info.authors.take(2).join(', '),
       if (info.fileSize case final size? when size > 0) _size(size),
     ].join(' · ');
@@ -456,10 +578,20 @@ class _PluginTile extends ConsumerWidget {
       leading: _PluginIcon(url: info.iconUrl, name: info.name),
       title: Row(
         children: [
-          Flexible(child: Text(info.name, maxLines: 1, overflow: TextOverflow.ellipsis)),
+          Flexible(
+            child: Text(
+              info.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
           const SizedBox(width: 6),
-          _Chip(text: newer != null ? 'v${installed?.info.version} → v${newer.version}' : 'v${installed?.info.version ?? info.version}',
-              color: newer != null ? cs.tertiary : cs.outline),
+          _Chip(
+            text: newer != null
+                ? 'v${installed?.info.version} → v${newer.version}'
+                : 'v${installed?.info.version ?? info.version}',
+            color: newer != null ? cs.tertiary : cs.outline,
+          ),
           if (status != null) ...[
             const SizedBox(width: 4),
             _Chip(text: status, color: info.isDown ? cs.error : cs.outline),
@@ -470,9 +602,14 @@ class _PluginTile extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (details.isNotEmpty) Text(details, maxLines: 1, overflow: TextOverflow.ellipsis),
+          if (details.isNotEmpty)
+            Text(details, maxLines: 1, overflow: TextOverflow.ellipsis),
           if (providers != null && providers.isNotEmpty)
-            Text(l10n.cloudStreamProviders(providers), maxLines: 1, overflow: TextOverflow.ellipsis),
+            Text(
+              l10n.cloudStreamProviders(providers),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           if (installed?.loadError != null)
             Text(
               l10n.cloudStreamCouldNotLoad(installed!.loadError!),
@@ -480,14 +617,20 @@ class _PluginTile extends ConsumerWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(color: cs.error),
             ),
-          if (applying) Text(l10n.cloudStreamSettingsApplying, style: TextStyle(color: cs.primary)),
+          if (applying)
+            Text(
+              l10n.cloudStreamSettingsApplying,
+              style: TextStyle(color: cs.primary),
+            ),
         ],
       ),
       trailing: busy
           ? const SizedBox(
               width: 24,
               height: 24,
-              child: AppLoadingIndicator(constraints: BoxConstraints(maxWidth: 24, maxHeight: 24)),
+              child: AppLoadingIndicator(
+                constraints: BoxConstraints(maxWidth: 24, maxHeight: 24),
+              ),
             )
           : Row(
               mainAxisSize: MainAxisSize.min,
@@ -501,7 +644,13 @@ class _PluginTile extends ConsumerWidget {
                       tooltip: l10n.install,
                       icon: const Icon(Icons.download_rounded),
                       onPressed: on
-                          ? () => unawaited(_install(context, () => notifier.install(info), l10n.cloudStreamInstalled))
+                          ? () => unawaited(
+                              _install(
+                                context,
+                                () => notifier.install(info),
+                                l10n.cloudStreamInstalled,
+                              ),
+                            )
                           : null,
                     ),
                   )
@@ -512,11 +661,17 @@ class _PluginTile extends ConsumerWidget {
                       child: IconButton(
                         key: ValueKey('cs3_support_${info.internalName}'),
                         tooltip: l10n.cloudStreamSupport,
-                        icon: Icon(Icons.volunteer_activism_rounded, color: cs.tertiary),
-                        onPressed: () => unawaited(openExtensionPopups(context, ref, installed)),
+                        icon: Icon(
+                          Icons.volunteer_activism_rounded,
+                          color: cs.tertiary,
+                        ),
+                        onPressed: () => unawaited(
+                          openExtensionPopups(context, ref, installed),
+                        ),
                       ),
                     ),
-                  if (installed.hasSettings == true && extensionScreensSupported)
+                  if (installed.hasSettings == true &&
+                      extensionScreensSupported)
                     Semantics(
                       identifier: 'cs3-settings-${info.internalName}',
                       child: IconButton(
@@ -525,15 +680,26 @@ class _PluginTile extends ConsumerWidget {
                         icon: const Icon(Icons.tune_rounded),
                         onPressed: applying || !on
                             ? null
-                            : () => unawaited(openExtensionSettings(context, ref, installed)),
+                            : () => unawaited(
+                                openExtensionSettings(context, ref, installed),
+                              ),
                       ),
                     ),
                   if (newer != null)
                     IconButton(
                       tooltip: l10n.cloudStreamUpdate,
-                      icon: Icon(Icons.system_update_alt_rounded, color: cs.tertiary),
+                      icon: Icon(
+                        Icons.system_update_alt_rounded,
+                        color: cs.tertiary,
+                      ),
                       onPressed: on
-                          ? () => unawaited(_install(context, () => notifier.install(newer), l10n.cloudStreamUpdated))
+                          ? () => unawaited(
+                              _install(
+                                context,
+                                () => notifier.install(newer),
+                                l10n.cloudStreamUpdated,
+                              ),
+                            )
                           : null,
                     ),
                   Semantics(
@@ -542,7 +708,13 @@ class _PluginTile extends ConsumerWidget {
                       key: ValueKey('cs3_uninstall_${info.internalName}'),
                       tooltip: l10n.cloudStreamUninstall,
                       icon: Icon(Icons.delete_outline, color: cs.error),
-                      onPressed: () => unawaited(_run(context, () => notifier.uninstall(installed), l10n.cloudStreamUninstalled(info.name))),
+                      onPressed: () => unawaited(
+                        _run(
+                          context,
+                          () => notifier.uninstall(installed),
+                          l10n.cloudStreamUninstalled(info.name),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -551,34 +723,69 @@ class _PluginTile extends ConsumerWidget {
     );
   }
 
-  static Future<void> _run(BuildContext context, Future<Object?> Function() action, String done) async {
+  static Future<void> _run(
+    BuildContext context,
+    Future<Object?> Function() action,
+    String done,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     final l10n = AppLocalizations.of(context)!;
     try {
       await action();
-      messenger.showSnackBar(SnackBar(content: Text(done)));
+      messenger.showSnackBar(
+        appSnackBar(
+          content: Text(done),
+          duration: const Duration(milliseconds: 1500),
+        ),
+      );
     } catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamFailed(CloudStreamRepository.errorMessage(error)))));
+      messenger.showSnackBar(
+        appSnackBar(
+          content: Text(
+            l10n.cloudStreamFailed(CloudStreamRepository.errorMessage(error)),
+          ),
+          duration: const Duration(milliseconds: 1500),
+        ),
+      );
     }
   }
 
   /// Installs or updates ([done] says which); one that downloads but does not load says so.
-  Future<void> _install(BuildContext context, Future<CsInstalledPlugin> Function() action, String Function(String name) done) async {
+  Future<void> _install(
+    BuildContext context,
+    Future<CsInstalledPlugin> Function() action,
+    String Function(String name) done,
+  ) async {
     final messenger = ScaffoldMessenger.of(context);
     final l10n = AppLocalizations.of(context)!;
     try {
       final installed = await action();
       final error = installed.loadError;
       messenger.showSnackBar(
-        SnackBar(content: Text(error == null ? done(info.name) : l10n.cloudStreamInstalledNotLoading(info.name, error))),
+        appSnackBar(
+          content: Text(
+            error == null
+                ? done(info.name)
+                : l10n.cloudStreamInstalledNotLoading(info.name, error),
+          ),
+          duration: const Duration(milliseconds: 1500),
+        ),
       );
     } catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text(l10n.cloudStreamFailed(CloudStreamRepository.errorMessage(error)))));
+      messenger.showSnackBar(
+        appSnackBar(
+          content: Text(
+            l10n.cloudStreamFailed(CloudStreamRepository.errorMessage(error)),
+          ),
+          duration: const Duration(milliseconds: 1500),
+        ),
+      );
     }
   }
 
-  static String _size(int bytes) =>
-      bytes >= 1024 * 1024 ? '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB' : '${(bytes / 1024).ceil()} KB';
+  static String _size(int bytes) => bytes >= 1024 * 1024
+      ? '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB'
+      : '${(bytes / 1024).ceil()} KB';
 }
 
 class _PluginIcon extends StatelessWidget {
@@ -594,10 +801,14 @@ class _PluginIcon extends StatelessWidget {
       width: 40,
       height: 40,
       alignment: Alignment.center,
-      decoration: BoxDecoration(color: cs.primaryContainer.withValues(alpha: 0.5), borderRadius: BorderRadius.circular(10)),
+      decoration: BoxDecoration(
+        color: cs.primaryContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(10),
+      ),
       child: Text(
         name.isEmpty ? '?' : name.substring(0, 1).toUpperCase(),
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(color: cs.primary, fontWeight: FontWeight.bold),
+        style: Theme.of(context).textTheme.titleSmall
+            ?.copyWith(color: cs.primary, fontWeight: FontWeight.bold),
       ),
     );
     final icon = url;
@@ -610,7 +821,8 @@ class _PluginIcon extends StatelessWidget {
         height: 40,
         fit: BoxFit.cover,
         errorBuilder: (_, _, _) => fallback,
-        loadingBuilder: (context, child, progress) => progress == null ? child : fallback,
+        loadingBuilder: (context, child, progress) =>
+            progress == null ? child : fallback,
       ),
     );
   }
@@ -632,13 +844,18 @@ class _Chip extends StatelessWidget {
     ),
     child: Text(
       text,
-      style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color, fontSize: 10, fontWeight: FontWeight.w600),
+      style: Theme.of(context).textTheme.labelSmall
+          ?.copyWith(color: color, fontSize: 10, fontWeight: FontWeight.w600),
     ),
   );
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.icon, required this.title, required this.message});
+  const _Empty({
+    required this.icon,
+    required this.title,
+    required this.message,
+  });
 
   final IconData icon;
   final String title;
@@ -656,11 +873,19 @@ class _Empty extends StatelessWidget {
           children: [
             Icon(icon, size: 48, color: theme.colorScheme.primary),
             const SizedBox(height: LayoutConstants.spacingMd),
-            Text(title, style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+            Text(
+              title,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: LayoutConstants.spacingSm),
             Text(
               message,
-              style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
               textAlign: TextAlign.center,
             ),
           ],

@@ -1,4 +1,5 @@
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -103,60 +104,63 @@ class _M3ToastOverlayState extends ConsumerState<M3ToastOverlay> {
             child: ListenableBuilder(
               listenable: notificationService,
               builder: (context, _) {
-                  final toasts = notificationService.toasts;
-                  if (toasts.isEmpty) {
-                    return const SizedBox.shrink();
-                  }
+                final toasts = notificationService.toasts;
+                if (toasts.isEmpty) {
+                  return const SizedBox.shrink();
+                }
 
-                  return IgnorePointer(
-                    ignoring: false,
-                    child: SafeArea(
-                      child: Align(
-                        alignment: isWideLayout
-                            ? Alignment.bottomRight
-                            : Alignment.bottomCenter,
-                        child: Padding(
-                          padding: EdgeInsets.only(
-                            left: isWideLayout ? 24 : 16,
-                            right: isWideLayout ? 24 : 16,
-                            bottom: isWideLayout ? 24 : 16,
+                return IgnorePointer(
+                  ignoring: false,
+                  child: SafeArea(
+                    child: Align(
+                      alignment: isWideLayout
+                          ? Alignment.bottomRight
+                          : Alignment.bottomCenter,
+                      child: Padding(
+                        padding: EdgeInsets.only(
+                          left: isWideLayout ? 24 : 16,
+                          right: isWideLayout ? 24 : 16,
+                          // Above the floating liquid-glass nav pill (68pt
+                          // pill + 8pt inset, inside the SafeArea), not
+                          // overlapping it at the screen bottom.
+                          bottom: isWideLayout ? 24 : 96,
+                        ),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(
+                            maxWidth: 360,
+                            minWidth: 160,
                           ),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(
-                              maxWidth: 360,
-                              minWidth: 160,
-                            ),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: isWideLayout
-                                  ? CrossAxisAlignment.end
-                                  : CrossAxisAlignment.center,
-                              children: [
-                                for (int i = 0; i < toasts.length; i++) ...[
-                                  if (i > 0) const SizedBox(height: 10),
-                                  _M3ToastCard(
-                                    key: ValueKey(toasts[i].id),
-                                    item: toasts[i],
-                                    onDismiss: () => notificationService
-                                        .dismissToast(toasts[i].id),
-                                    onHoverStart: () => notificationService
-                                        .pauseTimer(toasts[i].id),
-                                    onHoverEnd: () => notificationService
-                                        .resumeTimer(toasts[i].id),
-                                  ),
-                                ],
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: isWideLayout
+                                ? CrossAxisAlignment.end
+                                : CrossAxisAlignment.center,
+                            children: [
+                              for (int i = 0; i < toasts.length; i++) ...[
+                                if (i > 0) const SizedBox(height: 10),
+                                _M3ToastCard(
+                                  key: ValueKey(toasts[i].id),
+                                  item: toasts[i],
+                                  onDismiss: () => notificationService
+                                      .dismissToast(toasts[i].id),
+                                  onHoverStart: () => notificationService
+                                      .pauseTimer(toasts[i].id),
+                                  onHoverEnd: () => notificationService
+                                      .resumeTimer(toasts[i].id),
+                                ),
                               ],
-                            ),
+                            ],
                           ),
                         ),
                       ),
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              },
             ),
-        ],
-      );
+          ),
+      ],
+    );
   }
 }
 

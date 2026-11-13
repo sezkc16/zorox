@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/addons/data/addon_client.dart';
+import '../../../core/widgets/app_snack_bar.dart';
 import '../../../core/addons/data/addon_stream_service.dart';
 import '../../../core/addons/data/builtin_addons.dart';
 import '../../../core/addons/models/addon_manifest.dart';
@@ -239,7 +240,7 @@ class NuvioSearcher extends SkyStreamProvider implements SearchSource {
     final seasons = details?['seasons'];
     if (!host.mounted) return;
     if (seasons is! List) {
-      messenger?.showSnackBar(SnackBar(content: Text(failed)));
+      messenger?.showSnackBar(appSnackBar(content: Text(failed)));
       return;
     }
     await EpisodePickerSheet.open(

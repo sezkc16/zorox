@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/addons/data/addon_client.dart';
+import '../../../core/widgets/app_snack_bar.dart';
 import '../../../core/addons/data/addon_repository.dart';
 import '../../../core/addons/data/addon_stream_service.dart';
 import '../../../core/addons/models/addon_manifest.dart';
@@ -317,7 +318,7 @@ class _AddonSourcesSheetState extends ConsumerState<AddonSourcesSheet> {
     );
     if (!played && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('This source has no playable link.')),
+        appSnackBar(content: const Text('This source has no playable link.')),
       );
     }
   }
@@ -328,7 +329,7 @@ class _AddonSourcesSheetState extends ConsumerState<AddonSourcesSheet> {
     final uri = target == null ? null : Uri.tryParse(target);
     if (uri == null) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('This source has no usable link.')),
+        appSnackBar(content: const Text('This source has no usable link.')),
       );
       return;
     }
@@ -336,11 +337,13 @@ class _AddonSourcesSheetState extends ConsumerState<AddonSourcesSheet> {
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!opened) {
         messenger.showSnackBar(
-          SnackBar(content: Text('Could not open ${stream.headline}.')),
+          appSnackBar(content: Text('Could not open ${stream.headline}.')),
         );
       }
     } catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text('Could not open: $error')));
+      messenger.showSnackBar(
+        appSnackBar(content: Text('Could not open: $error')),
+      );
     }
   }
 
@@ -349,8 +352,8 @@ class _AddonSourcesSheetState extends ConsumerState<AddonSourcesSheet> {
     final url = stream.url;
     if (url == null || !stream.isDirect) {
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('Torrent sources stream only — press Play instead.'),
+        appSnackBar(
+          content: const Text('Torrent sources stream only — press Play instead.'),
         ),
       );
       return;
@@ -389,7 +392,7 @@ class _AddonSourcesSheetState extends ConsumerState<AddonSourcesSheet> {
 
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             started
                 ? 'Download started · ${stream.addonName} · ${stream.qualityLabel}'
@@ -401,7 +404,7 @@ class _AddonSourcesSheetState extends ConsumerState<AddonSourcesSheet> {
     } catch (error) {
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(content: Text('Download failed: $error')),
+        appSnackBar(content: Text('Download failed: $error')),
       );
     }
   }
@@ -458,7 +461,7 @@ class _AddonSourcesSheetState extends ConsumerState<AddonSourcesSheet> {
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: _diagnosticsReport()));
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Diagnostics copied')),
+                    appSnackBar(content: const Text('Diagnostics copied')),
                   );
                 },
                 icon: const Icon(Icons.copy_rounded, size: 14),

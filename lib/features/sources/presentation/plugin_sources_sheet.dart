@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/domain/entity/multimedia_item.dart';
+import '../../../core/widgets/app_snack_bar.dart';
 import '../../../core/network/clearance/clearance.dart';
 import '../../../core/network/clearance/site_checks.dart';
 import '../../../core/network/link_probe_service.dart';
@@ -575,7 +576,7 @@ class _PluginSourcesSheetState extends ConsumerState<PluginSourcesSheet> {
     final messenger = ScaffoldMessenger.of(context);
     if (!row.canDownload) {
       messenger.showSnackBar(
-        const SnackBar(content: Text('This link can only be streamed.')),
+        appSnackBar(content: const Text('This link can only be streamed.')),
       );
       return;
     }
@@ -610,7 +611,7 @@ class _PluginSourcesSheetState extends ConsumerState<PluginSourcesSheet> {
       if (!mounted) return;
       final resolution = _probes[row.url]?.resolutionLabel ?? row.qualityLabel;
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             started
                 ? 'Download started · ${row.providerName} · $resolution'
@@ -622,7 +623,7 @@ class _PluginSourcesSheetState extends ConsumerState<PluginSourcesSheet> {
     } catch (error) {
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(content: Text('Download failed: $error')),
+        appSnackBar(content: Text('Download failed: $error')),
       );
     }
   }
@@ -658,7 +659,7 @@ class _PluginSourcesSheetState extends ConsumerState<PluginSourcesSheet> {
                 onPressed: () {
                   Clipboard.setData(ClipboardData(text: _diagnosticsReport()));
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Diagnostics copied')),
+                    appSnackBar(content: const Text('Diagnostics copied')),
                   );
                 },
                 icon: const Icon(Icons.copy_rounded, size: 14),

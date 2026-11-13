@@ -69,6 +69,15 @@ class AppTheme {
         color: isDark ? onSurface : colorScheme.onSurface,
       ),
       actionTextColor: colorScheme.primary,
+      // Floating pill above the bottom nav, not a full-width black bar at
+      // the very bottom covering the liquid-glass nav pill: floating
+      // behaviour + rounded shape to match the M3 toasts. (SnackBarTheme
+      // has no margin slot — the margin that lifts the pill above the nav
+      // lives in [appSnackBar], which every SnackBar in the app is built
+      // with; see lib/core/widgets/app_snack_bar.dart.)
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      elevation: 6,
     );
   }
 
@@ -93,7 +102,9 @@ class AppTheme {
       FilledButtonThemeData(style: ButtonStyle(side: AppFocus.buttonSide(cs)));
 
   static ElevatedButtonThemeData _elevatedButtonTheme(ColorScheme cs) =>
-      ElevatedButtonThemeData(style: ButtonStyle(side: AppFocus.buttonSide(cs)));
+      ElevatedButtonThemeData(
+        style: ButtonStyle(side: AppFocus.buttonSide(cs)),
+      );
 
   static TextButtonThemeData _textButtonTheme(ColorScheme cs) =>
       TextButtonThemeData(style: ButtonStyle(side: AppFocus.buttonSide(cs)));
@@ -326,7 +337,10 @@ class AppTheme {
     );
   }
 
-  static ThemeData createLightTheme(ColorScheme? dynamicScheme, {Color? accent}) {
+  static ThemeData createLightTheme(
+    ColorScheme? dynamicScheme, {
+    Color? accent,
+  }) {
     _registerFontLicence();
     var colorScheme = const ColorScheme.light(
       primary: lightCoral,
@@ -360,8 +374,9 @@ class AppTheme {
     // colour is the accent darkened, so text stays readable on them.
     if (accent != null) {
       final hsl = HSLColor.fromColor(accent);
-      final darkAccent =
-          hsl.withLightness((hsl.lightness - 0.35).clamp(0.0, 1.0)).toColor();
+      final darkAccent = hsl
+          .withLightness((hsl.lightness - 0.35).clamp(0.0, 1.0))
+          .toColor();
       colorScheme = colorScheme.copyWith(
         primary: accent,
         onPrimary: Colors.white,

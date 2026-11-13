@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/nuvio/data/nuvio_repository.dart';
+import '../../../core/widgets/app_snack_bar.dart';
 import '../../../core/nuvio/data/nuvio_runtime.dart';
 import '../../../core/nuvio/data/nuvio_stream_service.dart';
 import '../../../core/nuvio/models/nuvio_models.dart';
@@ -49,14 +50,14 @@ class _NuvioPluginsViewState extends ConsumerState<NuvioPluginsView> {
           .read(nuvioRepositoryProvider.notifier)
           .addRepository(url);
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             'Added ${repo.displayName} ${repo.manifest?.version ?? ''} · ${repo.manifest?.scrapers.length ?? 0} plugins',
           ),
         ),
       );
     } catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text('Failed: $error')));
+      messenger.showSnackBar(appSnackBar(content: Text('Failed: $error')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -71,7 +72,7 @@ class _NuvioPluginsViewState extends ConsumerState<NuvioPluginsView> {
           .refreshAll();
       ref.read(nuvioStreamServiceProvider).clearCache();
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             changes == 0
                 ? 'All Nuvio plugins are up to date'
@@ -389,7 +390,7 @@ class _RepoCardState extends ConsumerState<_RepoCard> {
     ref.read(nuvioStreamServiceProvider).clearCache();
     if (!mounted) return;
     messenger.showSnackBar(
-      SnackBar(
+      appSnackBar(
         content: Text(
           summary == null
               ? 'Could not reach that repository'
@@ -708,15 +709,15 @@ class _ScraperTileState extends ConsumerState<_ScraperTile> {
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not read settings: $error')),
+        appSnackBar(content: Text('Could not read settings: $error')),
       );
       return;
     }
     if (!mounted) return;
     if (layout.isEmpty) {
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('This scraper exposes no configuration options'),
+        appSnackBar(
+          content: const Text('This scraper exposes no configuration options'),
         ),
       );
       return;
@@ -734,7 +735,7 @@ class _ScraperTileState extends ConsumerState<_ScraperTile> {
     await repository.saveScraperSettings(widget.scraper.id, values);
     ref.read(nuvioStreamServiceProvider).clearCache();
     messenger.showSnackBar(
-      SnackBar(content: Text('${widget.scraper.name} settings saved')),
+      appSnackBar(content: Text('${widget.scraper.name} settings saved')),
     );
   }
 

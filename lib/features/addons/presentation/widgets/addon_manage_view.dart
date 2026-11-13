@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/addons/data/addon_repository.dart';
+import '../../../../core/widgets/app_snack_bar.dart';
 import '../../../../core/addons/data/debrid_service.dart';
 import '../../../../core/addons/models/addon_manifest.dart';
 import '../../../../l10n/generated/app_localizations.dart';
@@ -99,11 +100,17 @@ class _AddonManageViewState extends ConsumerState<AddonManageView> {
           .read(addonRepositoryProvider.notifier)
           .install(url);
       messenger.showSnackBar(
-        SnackBar(content: Text('Installed ${addon.displayName}')),
+        appSnackBar(
+          content: Text('Installed ${addon.displayName}'),
+          duration: const Duration(milliseconds: 1500),
+        ),
       );
     } catch (error) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not install ${label ?? url}: $error')),
+        appSnackBar(
+          content: Text('Could not install ${label ?? url}: $error'),
+          duration: const Duration(milliseconds: 1500),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy.remove(url));
@@ -969,7 +976,7 @@ class _DebridCardState extends ConsumerState<_DebridCard> {
           .read(debridSettingsProvider.notifier)
           .save(_provider, _keyController.text);
       messenger.showSnackBar(
-        SnackBar(
+        appSnackBar(
           content: Text(
             _provider == DebridProvider.none
                 ? 'Debrid disabled'
@@ -979,7 +986,9 @@ class _DebridCardState extends ConsumerState<_DebridCard> {
         ),
       );
     } catch (error) {
-      messenger.showSnackBar(SnackBar(content: Text('Debrid error: $error')));
+      messenger.showSnackBar(
+        appSnackBar(content: Text('Debrid error: $error')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
