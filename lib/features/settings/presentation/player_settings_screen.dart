@@ -76,6 +76,25 @@ class PlayerSettingsScreen extends ConsumerWidget {
                       playerSettings.preferredPlayer,
                     ),
                   ),
+                  // Player Engine (libmpv / libVLC): which engine plays the
+                  // next video. libmpv is the Golden player (PiP on Android
+                  // only); libVLC is the only engine that can do PiP on
+                  // iOS. Takes effect on the next play.
+                  SettingsTile(
+                    icon: Icons.memory_rounded,
+                    title: l10n.playerEngine,
+                    subtitle: switch (playerSettings.playerEngine) {
+                      PlayerEngine.mpv =>
+                        'libmpv · ${l10n.playerEngineMpvDetail}',
+                      PlayerEngine.vlc =>
+                        'libVLC · ${l10n.playerEngineVlcDetail}',
+                    },
+                    onTap: () => showPlayerEngineDialog(
+                      context,
+                      ref,
+                      playerSettings.playerEngine,
+                    ),
+                  ),
                   if (isTouchDevice) ...[
                     SettingsTile(
                       icon: Icons.swipe_vertical_rounded,
@@ -160,14 +179,19 @@ class PlayerSettingsScreen extends ConsumerWidget {
                           .read(playerSettingsProvider.notifier)
                           .setAutoSkip(!playerSettings.autoSkip),
                     ),
-                    // Auto Picture-in-Picture (Android only): leaving the
-                    // app while a video plays shrinks it into the system's
-                    // PiP window instead of pausing. Off by default — a
-                    // window that pops up unasked is a surprise. Offered
-                    // only where PiP exists, the same gate as the PiP
-                    // button toggle in the controls dialog.
-                    if (platform == TargetPlatform.android &&
-                        profile?.isTv != true)
+                    // Auto Picture-in-Picture: leaving the app while a
+                    // video plays shrinks it into the system's PiP window
+                    // instead of pausing. Off by default — a window that
+                    // pops up unasked is a surprise. Offered only where PiP
+                    // exists for the selected engine: Android on either
+                    // engine, iOS only on libVLC (mpv has no AVPlayerLayer
+                    // there). The same gate as the PiP button toggle in the
+                    // controls dialog.
+                    if (pipAvailableForEngine(
+                      playerSettings.playerEngine,
+                      platform,
+                      isTv: profile?.isTv == true,
+                    ))
                       SettingsTile(
                         icon: Icons.picture_in_picture_alt_rounded,
                         title: 'Auto Picture-in-Picture',

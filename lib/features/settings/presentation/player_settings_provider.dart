@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../core/storage/secure_token_storage.dart';
@@ -92,6 +93,47 @@ const List<double> kSubtitleRaises = <double>[0, 0.05, 0.1, 0.15, 0.2];
 /// The text opacities the player offers, opaque first. A quarter is the
 /// least: text nobody can see is not a style.
 const List<double> kSubtitleTextOpacities = <double>[1, 0.75, 0.5, 0.25];
+
+/// Which engine plays video.
+///
+/// libmpv (media_kit, the Golden player) is the default: it is the engine
+/// the Golden UI was built on, and the one every +14 fix targets. libVLC
+/// is the v16/v17 engine: it is the only one that can do Picture-in-Picture
+/// on iOS (mpv renders through Metal with no AVPlayerLayer), and its
+/// buffering is its own network cache + prefetch ring (see media_options).
+/// The choice takes effect on the NEXT play — the route reads it once when
+/// the player opens, so a change mid-play never swaps the engine under a
+/// running video.
+enum PlayerEngine {
+  /// libmpv via media_kit — the Golden player. PiP on Android only.
+  mpv,
+
+  /// libVLC — the v16/v17 engine. PiP on Android and iOS.
+  vlc,
+}
+
+/// Whether Picture-in-Picture can exist for [engine] on [platform].
+///
+/// libVLC does PiP on both platforms (its iOS path is AVPictureInPicture
+/// via the v16 setDurationCap approach; v17's was black — see
+/// VlcPlayerScreen._pipAvailable). libmpv does PiP on Android only: on iOS
+/// it renders through Metal with no AVPlayerLayer to hand to the system.
+/// TVs never get PiP on either engine. This is the single source of truth
+/// for the PiP rules; the player screens' own _pipAvailable getters agree
+/// with it.
+bool pipAvailableForEngine(
+  PlayerEngine engine,
+  TargetPlatform platform, {
+  required bool isTv,
+}) {
+  if (isTv) return false;
+  return switch (engine) {
+    PlayerEngine.mpv => platform == TargetPlatform.android,
+    PlayerEngine.vlc =>
+      platform == TargetPlatform.android ||
+          platform == TargetPlatform.iOS,
+  };
+}
 
 class PlayerSettings {
   final PlayerGesture leftGesture;
@@ -219,6 +261,11 @@ class PlayerSettings {
   /// auto-enter has no switch of its own.
   final bool pipAutoEnter;
 
+  /// Which engine plays video. libmpv (the Golden player) by default;
+  /// libVLC when the viewer picks it. Read once by the player route when
+  /// the player opens — see [PlayerEngine].
+  final PlayerEngine playerEngine;
+
   // Subtitle Accounts
   final String osUsername;
   final String osPassword;
@@ -264,6 +311,7 @@ class PlayerSettings {
     this.showEpisodes = true,
     this.autoSkip = true,
     this.pipAutoEnter = false,
+    this.playerEngine = PlayerEngine.mpv,
     this.osUsername = '',
     this.osPassword = '',
     this.osApiKey = '',
@@ -311,6 +359,7 @@ class PlayerSettings {
     bool? showEpisodes,
     bool? autoSkip,
     bool? pipAutoEnter,
+    PlayerEngine? playerEngine,
     String? osUsername,
     String? osPassword,
     String? osApiKey,
@@ -362,6 +411,7 @@ class PlayerSettings {
       showEpisodes: showEpisodes ?? this.showEpisodes,
       autoSkip: autoSkip ?? this.autoSkip,
       pipAutoEnter: pipAutoEnter ?? this.pipAutoEnter,
+      playerEngine: playerEngine ?? this.playerEngine,
       osUsername: osUsername ?? this.osUsername,
       osPassword: osPassword ?? this.osPassword,
       osApiKey: osApiKey ?? this.osApiKey,
@@ -576,6 +626,12 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
           defaultValue: false,
         ) ??
         false;
+    // A name this build does not know — written by a newer one, or a
+    // corrupted box — reads as the default, as the subtitle font does.
+    final playerEngine = PlayerEngine.values.firstWhere(
+      (e) => e.name == storage.getPlayerSetting<String>('player_engine'),
+      orElse: () => PlayerEngine.mpv,
+    );
 
     // No defaultValue: an absent key has to stay absent, because null is what
     // Auto is stored as. The old key, player_network_buffer_mb, is never read.
@@ -624,6 +680,7 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
       showEpisodes: showEpisodes,
       autoSkip: autoSkip,
       pipAutoEnter: pipAutoEnter,
+      playerEngine: playerEngine,
       osUsername: osUser,
       osApiKey: osKey,
       subdlEmail: dlEmail,
@@ -802,6 +859,15 @@ class PlayerSettingsNotifier extends _$PlayerSettingsNotifier {
   Future<void> setPipAutoEnter(bool val) async {
     await _repository.setPlayerSetting('player_pip_auto_enter', val);
     _update((PlayerSettings c) => c.copyWith(pipAutoEnter: val));
+  }
+
+  /// Which engine plays the next video. Stored as the enum name ('mpv' /
+  /// 'vlc'); an unknown name reads back as mpv (see the load above).
+  /// Takes effect on the next play — the player route reads it once when
+  /// the player opens.
+  Future<void> setPlayerEngine(PlayerEngine engine) async {
+    await _repository.setPlayerSetting('player_engine', engine.name);
+    _update((PlayerSettings c) => c.copyWith(playerEngine: engine));
   }
 
   Future<void> setSubtitleSettings(

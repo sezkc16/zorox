@@ -1038,6 +1038,88 @@ void showDefaultPlayerDialog(
   );
 }
 
+/// Shows a dialog to pick the playback engine (libmpv / libVLC).
+///
+/// The choice is written to disk before the dialog closes, so a relaunch
+/// in the gap reads the new engine back. It takes effect on the NEXT play:
+/// the player route reads it once when the player opens, so a change
+/// mid-play never swaps the engine under a running video. libVLC is the
+/// only engine that can do PiP on iOS; libmpv does PiP on Android only.
+void showPlayerEngineDialog(
+  BuildContext context,
+  WidgetRef ref,
+  PlayerEngine current,
+) {
+  final l10n = AppLocalizations.of(context)!;
+
+  Future<void> choose(BuildContext ctx, PlayerEngine engine) async {
+    await ref.read(playerSettingsProvider.notifier).setPlayerEngine(engine);
+    if (ctx.mounted) Navigator.pop<void>(ctx);
+  }
+
+  showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      surfaceTintColor: Colors.transparent,
+      title: Text(l10n.playerEngine),
+      content: SingleChildScrollView(
+        child: RadioGroup<PlayerEngine>(
+          groupValue: current,
+          onChanged: (val) {
+            if (val == null) return;
+            unawaited(choose(ctx, val));
+          },
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              currentOption(
+                isCurrent: current == PlayerEngine.mpv,
+                child: ListTile(
+                  autofocus: current == PlayerEngine.mpv,
+                  title: const Text('libmpv'),
+                  subtitle: Text(l10n.playerEngineMpvDetail),
+                  leading: const Radio<PlayerEngine>(value: PlayerEngine.mpv),
+                  onTap: () => unawaited(choose(ctx, PlayerEngine.mpv)),
+                ),
+              ),
+              currentOption(
+                isCurrent: current == PlayerEngine.vlc,
+                child: ListTile(
+                  autofocus: current == PlayerEngine.vlc,
+                  title: const Text('libVLC'),
+                  subtitle: Text(l10n.playerEngineVlcDetail),
+                  leading: const Radio<PlayerEngine>(value: PlayerEngine.vlc),
+                  onTap: () => unawaited(choose(ctx, PlayerEngine.vlc)),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Text(
+                  l10n.playerEngineNextVideo,
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop<void>(ctx),
+          child: Text(
+            l10n.cancel,
+            style: TextStyle(
+              color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 /// Shows a dialog to pick the DNS-over-HTTPS provider.
 void showDohProviderDialog(BuildContext context, WidgetRef ref) {
   showDialog<void>(

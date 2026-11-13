@@ -97,6 +97,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get defaultPlayer => 'Default Player';
 
   @override
+  String get playerEngine => 'Player Engine';
+
+  @override
+  String get playerEngineMpvDetail => 'Golden player · PiP on Android';
+
+  @override
+  String get playerEngineVlcDetail => 'PiP on Android & iOS';
+
+  @override
+  String get playerEngineNextVideo => 'Takes effect on the next video';
+
+  @override
   String get leftGesture => 'Left Gesture';
 
   @override
