@@ -20,6 +20,7 @@ import '../../../../l10n/generated/app_localizations.dart';
 import '../../../../shared/widgets/custom_widgets.dart';
 import '../../domain/source_row_status.dart';
 import '../widgets/player_control_components.dart' show PlayerBackButtonSlot;
+import '../widgets/shrink_label.dart';
 import 'panel/player_panel_labels.dart'
     show sourcePlayStateLabel, sourceReachabilityLabel;
 
@@ -699,10 +700,8 @@ class _SourceRow extends StatelessWidget {
               // nothing in front of the name, which only repeated the last.
               children: [
                 Expanded(
-                  child: Text(
+                  child: ShrinkLabel(
                     row.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 14,

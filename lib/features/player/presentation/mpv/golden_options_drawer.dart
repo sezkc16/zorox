@@ -15,6 +15,7 @@ import 'package:vlc_player/vlc_player.dart';
 import '../../../../../core/domain/entity/multimedia_item.dart';
 import '../../domain/source_row_status.dart';
 import '../vlc/panel/player_panel_data.dart';
+import '../widgets/shrink_label.dart';
 import 'golden_drawer.dart';
 import 'golden_player_theme.dart';
 
@@ -294,10 +295,9 @@ class _SourceTile extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(
+                      ShrinkLabel(
                         label,
                         maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: selected
                               ? GoldenPlayerColors.goldHighlight
