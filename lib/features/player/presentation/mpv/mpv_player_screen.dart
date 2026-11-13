@@ -90,7 +90,10 @@ const Duration _kStartupWatchdog = Duration(seconds: 12);
 /// fast and the list would otherwise flash past unseen — the viewer must see
 /// the list (and get a chance to tap a row) before the video starts. This is
 /// a floor on visibility, not a forced wait: a tap still opens at once.
-const Duration _kMinListVisible = Duration(milliseconds: 800);
+/// 3s (up from 800ms): the user reported the list flashed past in ~1s and
+/// he could not pick a source — original SkyStream shows the list long
+/// enough to choose, so the hold matches that feel.
+const Duration _kMinListVisible = Duration(milliseconds: 3000);
 
 /// Pinch-zoom range, same as the VLC screen.
 const double _kMinZoom = 0.5;
