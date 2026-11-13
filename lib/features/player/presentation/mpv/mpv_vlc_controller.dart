@@ -250,6 +250,19 @@ class MpvVlcController implements VlcPlayerController {
           .where((t) => t.id != 'auto' && t.id != 'no')
           .toList(growable: false);
 
+  /// A track's id as the drawer (and the screen's remembered pick) knows
+  /// it: mpv's real track id — the `aid` / `sid` — not the track's
+  /// position in the list. media_kit reports the mpv id as a string
+  /// (`'1'`, `'2'`, …); the list position is NOT that id, and the list
+  /// is re-ordered while an HLS master settles (renditions appear as the
+  /// demuxer discovers them), so a position stored at drawer-open time
+  /// pointed at a different track by tap time — Hindi shown selected
+  /// while Tamil played, and the first tap landing on the wrong track.
+  /// The fallback (list position) only covers a track whose id mpv did
+  /// not number, which a real track never is.
+  int _trackId(String mpvId, int fallback) =>
+      int.tryParse(mpvId) ?? fallback;
+
   int? _activeAudioId() {
     final current = _player.state.track.audio;
     if (current.id == 'no') return null;
@@ -259,13 +272,16 @@ class MpvVlcController implements VlcPlayerController {
       // language preference set. The engine never reports which one it
       // picked (media_kit does not read the track-list `selected` flag),
       // so resolve it here, or nothing would read as selected while the
-      // video is playing.
+      // video is playing. The id returned is the track's real mpv aid,
+      // so the drawer row it lights is the track mpv is playing.
       if (_audioTracks.isEmpty) return null;
       final def = _audioTracks.indexWhere((t) => t.isDefault == true);
-      return def >= 0 ? def : 0;
+      final track = _audioTracks[def >= 0 ? def : 0];
+      return _trackId(track.id, def >= 0 ? def : 0);
     }
-    final index = _audioTracks.indexWhere((t) => t.id == current.id);
-    return index < 0 ? null : index;
+    // mpv's own word for the track playing: its aid, read back from the
+    // engine — never the position in a list that may since have moved.
+    return int.tryParse(current.id);
   }
 
   int? _activeSubtitleId() {
@@ -275,11 +291,13 @@ class MpvVlcController implements VlcPlayerController {
       // mpv auto-selected: it plays the default-flagged subtitle track,
       // else the first one — the same rule mpv itself uses. The engine
       // never reports which one it picked, so resolve it here, or the
-      // drawer would read "Off" while a subtitle renders.
+      // drawer would read "Off" while a subtitle renders. The id
+      // returned is the track's real mpv sid.
       final embedded = _embeddedSubtitles;
       if (embedded.isEmpty) return null;
       final def = embedded.indexWhere((t) => t.isDefault == true);
-      return def >= 0 ? def : 0;
+      final track = embedded[def >= 0 ? def : 0];
+      return _trackId(track.id, def >= 0 ? def : 0);
     }
     // An external file the screen added: mpv reports it under its title.
     final external = _externalSubtitles();
@@ -287,8 +305,9 @@ class MpvVlcController implements VlcPlayerController {
       (f) => f.label == current.title,
     );
     if (externalIndex >= 0) return _externalIdBase + externalIndex;
-    final index = _embeddedSubtitles.indexWhere((t) => t.id == current.id);
-    return index < 0 ? null : index;
+    // mpv's own word for the track playing: its sid, read back from the
+    // engine — never the position in a list that may since have moved.
+    return int.tryParse(current.id);
   }
 
   /// The language name for a track's language code or label, or null when
@@ -631,7 +650,9 @@ class MpvVlcController implements VlcPlayerController {
     return <VlcTrackDescription>[
       for (var i = 0; i < _audioTracks.length; i++)
         VlcTrackDescription(
-          id: i,
+          // The track's real mpv aid — never the list position (see
+          // [_trackId]): the drawer shows this id, and the tap sets it.
+          id: _trackId(_audioTracks[i].id, i),
           name: _trackDisplayName(
             title: _audioTracks[i].title,
             language: _audioTracks[i].language,
@@ -647,8 +668,19 @@ class MpvVlcController implements VlcPlayerController {
 
   @override
   Future<void> setAudioTrack(int id) async {
-    if (id < 0 || id >= _audioTracks.length) return;
-    await _player.setAudioTrack(_audioTracks[id]);
+    // By mpv aid, not by list position: the position of a track in the
+    // list moves while an HLS master settles, the aid does not. The id
+    // compared here is the same one [getAudioTracks] publishes for the
+    // track (see [_trackId]).
+    AudioTrack? track;
+    for (var i = 0; i < _audioTracks.length; i++) {
+      if (_trackId(_audioTracks[i].id, i) == id) {
+        track = _audioTracks[i];
+        break;
+      }
+    }
+    if (track == null) return;
+    await _player.setAudioTrack(track);
     publish();
   }
 
@@ -659,7 +691,9 @@ class MpvVlcController implements VlcPlayerController {
     return <VlcTrackDescription>[
       for (var i = 0; i < embedded.length; i++)
         VlcTrackDescription(
-          id: i,
+          // The track's real mpv sid — never the list position (see
+          // [_trackId]): the drawer shows this id, and the tap sets it.
+          id: _trackId(embedded[i].id, i),
           name: _trackDisplayName(
             title: embedded[i].title,
             language: embedded[i].language,
@@ -691,9 +725,17 @@ class MpvVlcController implements VlcPlayerController {
       publish();
       return;
     }
+    // By mpv sid, not by list position (see [setAudioTrack]).
     final embedded = _embeddedSubtitles;
-    if (id < 0 || id >= embedded.length) return;
-    await _player.setSubtitleTrack(embedded[id]);
+    SubtitleTrack? track;
+    for (var i = 0; i < embedded.length; i++) {
+      if (_trackId(embedded[i].id, i) == id) {
+        track = embedded[i];
+        break;
+      }
+    }
+    if (track == null) return;
+    await _player.setSubtitleTrack(track);
     publish();
   }
 

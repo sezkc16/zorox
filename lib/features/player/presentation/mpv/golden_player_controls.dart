@@ -8,8 +8,9 @@
 /// Layout (mockup + spec):
 ///   * top bar — Back, title + season/episode line, audio/subtitle,
 ///     Episodes (series only), More;
-///   * centre — Rewind 10 s, Play/Pause (gold circle), Forward 10 s;
-///     while a right-side hold is down, the gold "▶▶ 2x" pill instead;
+///   * centre — Rewind 10 s, Play/Pause (gold circle), Forward 10 s
+///     (hidden while a right-side hold is down — the hold shows no label
+///     at all: the viewer asked for the "2x" pill to go too);
 ///   * bottom — golden seekbar with current/total time, then Previous,
 ///     Next (series), subtitle, volume, speed chip, lock, aspect, rotate.
 ///
@@ -48,6 +49,7 @@ import '../player_brightness.dart';
 import '../vlc/chrome_visibility_controller.dart';
 import '../vlc/panel/player_panel_data.dart';
 import '../vlc/transient_overlay.dart';
+import 'golden_drawer.dart';
 import 'golden_episodes_drawer.dart';
 import 'golden_options_drawer.dart';
 import 'golden_player_theme.dart';
@@ -274,13 +276,24 @@ class _GoldenPlayerControlsState
     // Zones are thirds, not halves: the centre third toggles play/pause
     // and the outer thirds seek ±10s, so a double-tap near the middle
     // never seeks when the viewer meant to pause (and a seek near the
-    // edge never pauses when the viewer meant to skip). Locked, this
-    // never runs — the locked layer has no double-tap at all.
+    // edge never pauses when the viewer meant to skip).
     if (dx >= width / 3 && dx <= 2 * width / 3) {
       _togglePlayWithFlash();
       return;
     }
     _seekBy(dx >= width / 2 ? _kGoldenSeekStep : -_kGoldenSeekStep);
+  }
+
+  /// Locked double-tap: only the outer thirds seek (±10s) — the same
+  /// zones as unlocked, so a pocket that double-taps the right side
+  /// still skips ahead. The centre third does nothing (play/pause stays
+  /// locked), and there is no centre flash: a locked tap must not look
+  /// like a control, and the +10s/−10s pop-up is gone by the +14 rule.
+  void _doubleTapLocked(double dx) {
+    final width = context.size?.width ?? 0;
+    if (width <= 0) return;
+    if (dx >= width / 3 && dx <= 2 * width / 3) return;
+    _seekBy(dx > 2 * width / 3 ? _kGoldenSeekStep : -_kGoldenSeekStep);
   }
 
   /// Centre double-tap: pause if playing, resume if paused, and flash
@@ -693,12 +706,16 @@ class _GoldenPlayerControlsState
         // on the outer thirds and toggles play/pause in the centre
         // third, long-press (right half) holds 2x, pinch zooms,
         // vertical swipe rails volume (right) / brightness (left).
-        // Locked, only a bare tap survives — a request to see the
-        // unlock chip, never a request to hide it.
+        // Locked, only a bare tap and the outer-third double-tap seek
+        // survive — the tap asks to see the unlock chip, the double-tap
+        // skips ±10s; nothing else answers a finger.
         if (isLocked)
           GestureDetector(
             behavior: HitTestBehavior.translucent,
             onTap: widget.chrome.poke,
+            onDoubleTapDown: doubleTapEnabled
+                ? (d) => _doubleTapLocked(d.localPosition.dx)
+                : null,
           )
         else
           // The Listener lands the pan's anchor (see [_onPointerDown]):
@@ -768,18 +785,6 @@ class _GoldenPlayerControlsState
                     ),
                   ),
                 ),
-        ),
-
-        // The 2x pill, while a hold is down (mockup: centre-right).
-        AnimatedOpacity(
-          opacity: _boosting ? 1.0 : 0.0,
-          duration: GoldenPlayerMotion.fast,
-          child: _boosting
-              ? const Align(
-                  alignment: Alignment(0.5, -0.15),
-                  child: _TwoXIndicator(),
-                )
-              : const SizedBox.shrink(),
         ),
 
         // Top + bottom chrome, fading together in 250 ms.
@@ -898,7 +903,12 @@ class _GoldenPlayerControlsState
                                   onOpenSources: () =>
                                       _openDrawer(_GoldenDrawerKind.sources),
                                   onPickVolume: _pickVolume,
-                                  speed: value.playbackSpeed,
+                                  // While a 2x hold is down, the chip shows
+                                  // the speed the hold will restore (1x) —
+                                  // never "2x": the viewer asked for no
+                                  // "2x" written anywhere during a hold.
+                                  speed: _speedBeforeBoost ??
+                                      value.playbackSpeed,
                                   onPickSpeed: _pickSpeed,
                                   locked: _locked,
                                   lockAvailable: widget.lockAvailable,
@@ -982,8 +992,25 @@ class _GoldenPlayerControlsState
             ),
           ),
 
-        // A drawer, sliding in from the right over the video (280 ms,
-        // slide + fade both ways).
+        // A drawer over the video (280 ms both ways), in two parts so
+        // they never move together: the scrim FADES in place — a scrim
+        // that slid with the panel read as a dark curtain sweeping
+        // right-to-left across the video — and only the panel SLIDES in
+        // from the right. The scrim is keyed by open/closed, so switching
+        // drawers keeps it steady instead of fading it out and back in.
+        AnimatedSwitcher(
+          duration: GoldenPlayerMotion.drawer,
+          switchInCurve: GoldenPlayerMotion.curve,
+          switchOutCurve: GoldenPlayerMotion.curve,
+          transitionBuilder: (child, animation) =>
+              FadeTransition(opacity: animation, child: child),
+          child: _drawer == _GoldenDrawerKind.none
+              ? const SizedBox.shrink(key: ValueKey<String>('scrim-none'))
+              : GoldenDrawerScrim(
+                  key: const ValueKey<String>('scrim-open'),
+                  onClose: _closeDrawer,
+                ),
+        ),
         AnimatedSwitcher(
           duration: GoldenPlayerMotion.drawer,
           switchInCurve: GoldenPlayerMotion.curve,
@@ -994,13 +1021,7 @@ class _GoldenPlayerControlsState
                   begin: const Offset(1, 0),
                   end: Offset.zero,
                 ).animate(animation);
-            return SlideTransition(
-              position: offset,
-              child: FadeTransition(
-                opacity: animation,
-                child: child,
-              ),
-            );
+            return SlideTransition(position: offset, child: child);
           },
           child: _drawer == _GoldenDrawerKind.none
               ? const SizedBox.shrink(key: ValueKey<String>('none'))
@@ -1103,8 +1124,10 @@ class _GoldenRailData {
 /// Kept deliberately dumb: it renders a value someone else owns. The
 /// gesture that changes it, the engine call and the timer that hides it
 /// all live in the controls, so this cannot become a second owner of
-/// player state. Gold fill on a dark pill, to match the Golden chrome;
-/// brightness sits on the left edge, volume on the right.
+/// player state. No pill, no border: just the gold bar floating straight
+/// over the video, the number on top and the icon at the bottom — the
+/// viewer asked for the dark background to go. Both rails share this
+/// widget, so volume (right) and brightness (left) match.
 class _GoldenRail extends StatelessWidget {
   const _GoldenRail({required this.data});
 
@@ -1130,102 +1153,50 @@ class _GoldenRail extends StatelessWidget {
           left: data.onLeft ? 24 + safe.left : 0,
           right: data.onLeft ? 0 : 24 + safe.right,
         ),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.62),
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: GoldenPlayerColors.divider),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  data.label,
-                  style: const TextStyle(
-                    color: GoldenPlayerColors.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    fontFeatures: [FontFeature.tabularFigures()],
-                  ),
-                ),
-                const SizedBox(height: 10),
-                SizedBox(
-                  width: 6,
-                  height: _trackHeight,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(3),
-                    child: Stack(
-                      children: [
-                        const Positioned.fill(
-                          child: ColoredBox(color: Color(0xFF3A352E)),
-                        ),
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          height: _trackHeight * filled,
-                          child: const ColoredBox(
-                            color: GoldenPlayerColors.gold,
-                          ),
-                        ),
-                      ],
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              data.label,
+              style: const TextStyle(
+                color: GoldenPlayerColors.textPrimary,
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: 6,
+              height: _trackHeight,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(3),
+                child: Stack(
+                  children: [
+                    const Positioned.fill(
+                      child: ColoredBox(color: Color(0xFF3A352E)),
                     ),
-                  ),
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: _trackHeight * filled,
+                      child: const ColoredBox(
+                        color: GoldenPlayerColors.gold,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 10),
-                Icon(
-                  data.icon,
-                  color: GoldenPlayerColors.goldHighlight,
-                  size: 20,
-                ),
-              ],
+              ),
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The gold "▶▶ 2x" pill, shown while a right-side hold is down.
-///
-/// Pill only, no hint text: the viewer asked for the "Hold right side
-/// for 2x speed / Release to return to normal" lines to go — the pill
-/// itself says what is happening, and the text just covers the picture.
-class _TwoXIndicator extends StatelessWidget {
-  const _TwoXIndicator();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(GoldenPlayerRadii.pill),
-        border: Border.all(
-          color: GoldenPlayerColors.gold.withValues(alpha: 0.7),
-        ),
-      ),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: <Widget>[
-          Icon(
-            Icons.fast_forward_rounded,
-            color: GoldenPlayerColors.goldHighlight,
-            size: 20,
-          ),
-          SizedBox(width: 4),
-          Text(
-            '2x',
-            style: TextStyle(
+            const SizedBox(height: 10),
+            Icon(
+              data.icon,
               color: GoldenPlayerColors.goldHighlight,
-              fontWeight: FontWeight.w800,
-              fontSize: 16,
+              size: 20,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

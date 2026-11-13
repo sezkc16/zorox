@@ -431,28 +431,29 @@ class _AppScaffoldState extends ConsumerState<AppScaffold>
           },
           child: Scaffold(
             resizeToAvoidBottomInset: false,
-            extendBody: true,
-            body: MediaQuery(
-              data: mq.copyWith(
-                padding: mq.padding.copyWith(
-                  bottom: mq.padding.bottom + navBarTotalHeight,
+            // No bottomNavigationBar: the bar is a Positioned overlay in
+            // the body Stack (the package requires a Stack ancestor, and
+            // it reads the real safe-area padding itself — so the bar sits
+            // OUTSIDE the inflated MediaQuery below, while the content
+            // sits inside it).
+            body: Stack(
+              children: [
+                MediaQuery(
+                  data: mq.copyWith(
+                    padding: mq.padding.copyWith(
+                      bottom: mq.padding.bottom + navBarTotalHeight,
+                    ),
+                    viewPadding: mq.viewPadding.copyWith(
+                      bottom: mq.viewPadding.bottom + navBarTotalHeight,
+                    ),
+                  ),
+                  child: _branchTransition(),
                 ),
-                viewPadding: mq.viewPadding.copyWith(
-                  bottom: mq.viewPadding.bottom + navBarTotalHeight,
+                CustomBottomNavBar(
+                  currentIndex: widget.navigationShell.currentIndex,
+                  onTap: (index) => _onItemTapped(index, context),
                 ),
-              ),
-              child: _branchTransition(),
-            ),
-            bottomNavigationBar: Padding(
-              padding: EdgeInsets.only(
-                left: 24,
-                right: 24,
-                bottom: bottomInset,
-              ),
-              child: CustomBottomNavBar(
-                currentIndex: widget.navigationShell.currentIndex,
-                onTap: (index) => _onItemTapped(index, context),
-              ),
+              ],
             ),
           ),
         );

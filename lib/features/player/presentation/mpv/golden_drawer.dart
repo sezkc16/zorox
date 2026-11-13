@@ -1,21 +1,49 @@
 /// The right-side sliding drawer shell for the golden player.
 ///
 /// One shell for every drawer — Episodes, Subtitle Style, Audio, Sources —
-/// so they all slide, fade and dismiss the same way: a dark panel
-/// (#141210) sliding in from the right over a tap-to-dismiss scrim, the
-/// video still visible on the left, subtitles still readable while it is
-/// open. 280 ms, ease-out.
+/// so they all slide and dismiss the same way: a dark panel (#141210)
+/// sliding in from the right, the video still visible on the left,
+/// subtitles still readable while it is open. 280 ms, ease-out.
+///
+/// The dim behind the panel is NOT part of this shell: it is
+/// [GoldenDrawerScrim], rendered as a sibling by the controls, so it can
+/// fade in place while only the panel slides. The scrim used to live
+/// inside this shell, and the slide that carried the panel carried the
+/// scrim with it — a dark veil sweeping right-to-left across the video
+/// every time a drawer opened.
 library;
 
 import 'package:flutter/material.dart';
 
 import 'golden_player_theme.dart';
 
+/// The dim behind a golden drawer: full-screen, tap-to-dismiss, fixed.
+///
+/// Fades only — it never slides. The controls animate it with a
+/// [FadeTransition] while the panel gets the [SlideTransition]; a scrim
+/// that moved with the panel read as a dark curtain sweeping the video.
+class GoldenDrawerScrim extends StatelessWidget {
+  const GoldenDrawerScrim({required this.onClose, super.key});
+
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onClose,
+        child: Container(color: Colors.black.withValues(alpha: 0.45)),
+      ),
+    );
+  }
+}
+
 /// A drawer panel that slides in from the right edge.
 ///
 /// [child] is the drawer's content (its own header included). The panel is
-/// [width] wide, at most 85 % of the screen, and sits above [scrim] — a
-/// tap on the scrim calls [onClose].
+/// [width] wide, at most 85 % of the screen. The scrim is a sibling
+/// ([GoldenDrawerScrim]), not part of this widget.
 class GoldenDrawer extends StatelessWidget {
   const GoldenDrawer({
     required this.title,
@@ -34,50 +62,36 @@ class GoldenDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: <Widget>[
-        // Scrim: tap anywhere off the panel to close it.
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onClose,
-            child: Container(color: Colors.black.withValues(alpha: 0.45)),
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Container(
+        width: width,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          color: GoldenPlayerColors.backgroundSecondary,
+          border: Border(
+            left: GoldenPlayerColors.drawerBorder,
+          ),
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(GoldenPlayerRadii.drawer),
+            bottomLeft: Radius.circular(GoldenPlayerRadii.drawer),
           ),
         ),
-        // The panel.
-        Align(
-          alignment: Alignment.centerRight,
-          child: Container(
-            width: width,
-            height: double.infinity,
-            decoration: const BoxDecoration(
-              color: GoldenPlayerColors.backgroundSecondary,
-              border: Border(
-                left: GoldenPlayerColors.drawerBorder,
+        child: SafeArea(
+          left: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              _DrawerHeader(title: title, onClose: onClose),
+              const Divider(
+                height: 1,
+                color: GoldenPlayerColors.divider,
               ),
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(GoldenPlayerRadii.drawer),
-                bottomLeft: Radius.circular(GoldenPlayerRadii.drawer),
-              ),
-            ),
-            child: SafeArea(
-              left: false,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: <Widget>[
-                  _DrawerHeader(title: title, onClose: onClose),
-                  const Divider(
-                    height: 1,
-                    color: GoldenPlayerColors.divider,
-                  ),
-                  Expanded(child: child),
-                ],
-              ),
-            ),
+              Expanded(child: child),
+            ],
           ),
         ),
-      ],
+      ),
     );
   }
 }
