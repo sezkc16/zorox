@@ -15,6 +15,11 @@
 ///     (including the +5/−5 position nudge), and the episode picker with
 ///     posters;
 ///   * skip-intro/outro chips, the up-next countdown, and the ended card;
+///   * subtitles that sit low and at full size: media_kit's SubtitleView
+///     caches its padding at creation and scales text down on phones, so
+///     the screen pushes the padding through VideoState.setSubtitleViewPadding
+///     and the configuration uses a 1.0 text scaler — the Position slider
+///     and +5/−5 nudge move the caption live.
 ///   * Continue Watching resume (a [PlaybackProgressRecorder] fed from the
 ///     same samples as the tracker), the source list in portrait before
 ///     play, Back stopping the audio and returning to portrait, no centre
@@ -172,6 +177,15 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   /// The chrome's auto-hide clock, owned here and lent to the controls.
   late final ChromeVisibilityController _chrome;
 
+  /// The video view's key, so the screen can push the subtitle padding
+  /// into it — media_kit's SubtitleView caches its padding at creation
+  /// and never re-reads the configuration (see _syncSubtitlePadding).
+  final GlobalKey<VideoState> _videoKey = GlobalKey<VideoState>();
+
+  /// The subtitle padding last pushed into the video view, so the sync
+  /// only calls the view when the padding actually moved.
+  EdgeInsets? _lastSubtitlePadding;
+
   /// The pinch zoom's value, owned here and written by the controls'
   /// gesture layer; the Transform over the video reads it.
   final ValueNotifier<double> _videoScale = ValueNotifier<double>(1.0);
@@ -264,6 +278,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _chrome = ChromeVisibilityController(
       isPlaying: () => _adapter.value.isPlaying,
     );
+    // The chrome showing/hiding moves the caption's bottom padding, so
+    // the padding is pushed into the video view on every change.
+    _chrome.addListener(_onChromeVisibilityChanged);
     _init();
   }
 
@@ -284,6 +301,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     } catch (_) {
       // Tracking must never block leaving the player.
     }
+    _chrome.removeListener(_onChromeVisibilityChanged);
     _chrome.dispose();
     _videoScale.dispose();
     _bufferedFraction.dispose();
@@ -1053,6 +1071,36 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     };
   }
 
+  /// The chrome showed or hid, so the caption's bottom padding moved
+  /// (40px hidden, 116px up) — push it into the video view.
+  void _onChromeVisibilityChanged() => _syncSubtitlePadding();
+
+  /// Pushes the current subtitle padding into the video view.
+  ///
+  /// media_kit's [SubtitleView] caches its padding in a `late` field at
+  /// creation and has no `didUpdateWidget`, so a rebuilt
+  /// [SubtitleViewConfiguration] never reaches it — the caption stays
+  /// wherever it was created (high) and the Position slider / +5/−5 nudge
+  /// does nothing. The only update path is
+  /// [VideoState.setSubtitleViewPadding]. This runs after every build
+  /// (post-frame, so a settings change moves the caption) and whenever the
+  /// chrome shows or hides. Guarded on the last pushed padding so it is a
+  /// no-op when nothing moved.
+  void _syncSubtitlePadding() {
+    if (_disposed || !mounted) return;
+    final settings =
+        ref.read(playerSettingsProvider).asData?.value ??
+        const PlayerSettings();
+    final padding = mpvSubtitleViewConfiguration(
+      settings,
+      screenHeight: MediaQuery.sizeOf(context).height,
+      controlsVisible: _chrome.value,
+    ).padding;
+    if (padding == _lastSubtitlePadding) return;
+    _lastSubtitlePadding = padding;
+    _videoKey.currentState?.setSubtitleViewPadding(padding);
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
@@ -1061,6 +1109,20 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     final settings =
         ref.watch(playerSettingsProvider).asData?.value ??
         const PlayerSettings();
+    // The subtitle configuration for the video view. The view caches its
+    // padding at creation (see _syncSubtitlePadding), so a changed
+    // configuration alone does not move the caption — push the new padding
+    // after the frame, only if it moved.
+    final subtitleConfig = mpvSubtitleViewConfiguration(
+      settings,
+      screenHeight: MediaQuery.sizeOf(context).height,
+      controlsVisible: _chrome.value,
+    );
+    if (subtitleConfig.padding != _lastSubtitlePadding) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _syncSubtitlePadding(),
+      );
+    }
     final profile = ref.watch(deviceProfileProvider).asData?.value;
     final form = playerFormFactorOf(profile);
     final canRotate = playerCanRotate(profile);
@@ -1082,6 +1144,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
             ),
             child: Center(
               child: Video(
+                key: _videoKey,
                 controller: _videoController,
                 fit: _boxFitFor(_fit),
                 fill: Colors.black,
@@ -1089,11 +1152,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                 controls: (_) => const SizedBox.shrink(),
                 wakelock: true,
                 pauseUponEnteringBackgroundMode: true,
-                subtitleViewConfiguration: mpvSubtitleViewConfiguration(
-                  settings,
-                  screenHeight: MediaQuery.sizeOf(context).height,
-                  controlsVisible: _chrome.value,
-                ),
+                subtitleViewConfiguration: subtitleConfig,
               ),
             ),
           ),

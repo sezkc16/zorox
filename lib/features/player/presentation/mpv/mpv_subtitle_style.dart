@@ -143,6 +143,11 @@ SubtitleViewConfiguration mpvSubtitleViewConfiguration(
   return SubtitleViewConfiguration(
     style: mpvSubtitleTextStyle(settings),
     textAlign: TextAlign.center,
+    // media_kit's SubtitleView scales text down by sqrt(area / 1920x1080)
+    // when no textScaler is given — on a phone in landscape that is ~0.44,
+    // so a 22pt caption renders at ~10pt. 1.0 renders the configured size
+    // as-is, matching the VLC player's look.
+    textScaler: const TextScaler.linear(1.0),
     padding: EdgeInsets.fromLTRB(16, 0, 16, base + liftPx),
   );
 }
