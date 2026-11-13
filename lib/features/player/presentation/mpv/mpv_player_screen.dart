@@ -429,6 +429,15 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     WidgetsBinding.instance.addObserver(this);
     _currentEpisode = widget.episode;
     _currentVideoUrl = widget.videoUrl;
+    // Fullscreen playback hides the Android status + navigation bars, so
+    // the video fills the whole screen with nothing on top of it. The VLC
+    // screen does the same in its own initState; the mpv screen never did,
+    // which is why the status bar (time, signal, battery) showed over the
+    // video on Android. iOS already hides its status bar here, so this is
+    // Android-only. Restored in dispose.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    }
     // No landscape here: the source list shown before play stays portrait,
     // and landscape is forced only when the video itself first starts
     // playing (see the playing listener).
@@ -475,6 +484,15 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     unawaited(_player.dispose());
     _adapter.dispose();
     _restoreOrientation();
+    // Hands the status + navigation bars back: without this the app stays
+    // in immersive mode after the player closes, and Home has no status
+    // bar. Mirrors the hide in initState (Android only).
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      SystemChrome.setEnabledSystemUIMode(
+        SystemUiMode.manual,
+        overlays: SystemUiOverlay.values,
+      );
+    }
     super.dispose();
   }
 
