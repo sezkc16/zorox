@@ -45,6 +45,24 @@ import '../../domain/track_language.dart';
 /// never collide with an embedded track's index.
 const int _externalIdBase = 1000;
 
+/// Keeps the first item of each key, dropping later duplicates.
+///
+/// The subtitle track list's dedup rule: mpv reports the same subtitle
+/// content once per HLS rendition/variant, so one language can appear half
+/// a dozen times with the same title + language ("English - [auto]" six
+/// times over), and a source can ship the same side-car file twice. The
+/// viewer cannot tell the copies apart — the row shows only title +
+/// language — so only the first is kept. Pure, so the rule is testable
+/// without a player.
+List<T> deduplicateByKey<T, K>(List<T> items, K Function(T) key) {
+  final seen = <K>{};
+  final out = <T>[];
+  for (final item in items) {
+    if (seen.add(key(item))) out.add(item);
+  }
+  return out;
+}
+
 /// How near a seek's target the reported position must land for the pending
 /// seek to count as arrived.
 const Duration _kSeekLandedWithin = Duration(seconds: 3);
@@ -289,10 +307,27 @@ class MpvVlcController implements VlcPlayerController {
   List<AudioTrack> get _audioTracks => _player.state.tracks.audio
       .where((t) => t.id != 'auto' && t.id != 'no')
       .toList(growable: false);
-  List<SubtitleTrack> get _embeddedSubtitles =>
-      _player.state.tracks.subtitle
-          .where((t) => t.id != 'auto' && t.id != 'no')
-          .toList(growable: false);
+  /// The embedded subtitle tracks, deduplicated by title + language: mpv
+  /// reports the same content once per HLS rendition/variant, so without
+  /// this the drawer lists "English - [auto]" six times over. Keeping the
+  /// first occurrence, so the row the viewer sees is the track the id
+  /// selects. This is the list every id maps against — get, set and active
+  /// all read it — so a shown id always selects the track it names, and
+  /// tapping a row can never spawn more duplicates: the rendered list is
+  /// rebuilt from this deduped source, so no matter how many renditions
+  /// mpv discovers on a tap, the drawer still shows one row per track.
+  List<SubtitleTrack> get _embeddedSubtitles => deduplicateByKey(
+    _player.state.tracks.subtitle
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList(growable: false),
+    (t) => (t.title, t.language),
+  );
+
+  /// The side-car / downloaded subtitle files, deduplicated by URL: a source
+  /// can ship the same file twice, and the drawer would list it twice. The
+  /// same list every id maps against, as with [_embeddedSubtitles].
+  List<SubtitleFile> get _externalSubtitlesDeduped =>
+      deduplicateByKey(_externalSubtitles(), (f) => f.url);
 
   /// A track's id as the drawer (and the screen's remembered pick) knows
   /// it: mpv's real track id — the `aid` / `sid` — not the track's
@@ -366,7 +401,7 @@ class MpvVlcController implements VlcPlayerController {
       return _trackId(track.id, def >= 0 ? def : 0);
     }
     // An external file the screen added: mpv reports it under its title.
-    final external = _externalSubtitles();
+    final external = _externalSubtitlesDeduped;
     final externalIndex = external.indexWhere(
       (f) => f.label == current.title,
     );
@@ -753,7 +788,7 @@ class MpvVlcController implements VlcPlayerController {
   @override
   Future<List<VlcTrackDescription>> getSubtitleTracks() async {
     final embedded = _embeddedSubtitles;
-    final external = _externalSubtitles();
+    final external = _externalSubtitlesDeduped;
     return <VlcTrackDescription>[
       for (var i = 0; i < embedded.length; i++)
         VlcTrackDescription(
@@ -781,7 +816,7 @@ class MpvVlcController implements VlcPlayerController {
   @override
   Future<void> setSubtitleTrack(int id) async {
     if (id >= _externalIdBase) {
-      final external = _externalSubtitles();
+      final external = _externalSubtitlesDeduped;
       final index = id - _externalIdBase;
       if (index < 0 || index >= external.length) return;
       final file = external[index];

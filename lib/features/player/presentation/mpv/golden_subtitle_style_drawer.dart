@@ -140,6 +140,7 @@ class _GoldenSubtitleStyleDrawerState
               // highlight, so the current track reads at a glance.
               const GoldenSectionLabel('Subtitle'),
               _SubtitleTrackTile(
+                key: const ValueKey('off'),
                 label: 'Off',
                 selected:
                     widget.controller.value.activeSubtitleTrackId == null,
@@ -147,6 +148,13 @@ class _GoldenSubtitleStyleDrawerState
               ),
               for (final track in _tracks)
                 _SubtitleTrackTile(
+                  // A stable key per track id: the list is re-read on every
+                  // track-revision bump while an HLS master settles, and
+                  // without keys the rows are rebuilt from scratch and the
+                  // list flickers/jumps under the viewer's finger while
+                  // scrolling. With keys, a row that is still there keeps
+                  // its place.
+                  key: ValueKey(track.id),
                   label: track.name,
                   selected:
                       track.id ==
@@ -425,6 +433,7 @@ String subtitleFontLabelOf(SubtitleFont font) => switch (font) {
 /// highlight on the selected track, tap to pick it.
 class _SubtitleTrackTile extends StatelessWidget {
   const _SubtitleTrackTile({
+    super.key,
     required this.label,
     required this.selected,
     required this.onTap,
