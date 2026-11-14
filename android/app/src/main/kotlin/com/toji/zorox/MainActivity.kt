@@ -427,6 +427,26 @@ class MainActivity : com.lagradost.cloudstream3.MainActivity(), FlutterEngineCon
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         flutterFragment?.onUserLeaveHint()
+        // Auto picture-in-picture on Home / Recents, entered here rather
+        // than from Dart's lifecycle `inactive`: `inactive` arrives at
+        // onPause, by which time Android (12+, Samsung included) may
+        // refuse enterPictureInPictureMode — the activity is no longer
+        // resumed. onUserLeaveHint fires while it still is, so the window
+        // opens reliably. Only while a film is actually playing (the Dart
+        // side syncs that on every play/pause flip and clears it on player
+        // dispose, so a stale `true` cannot open a window for a player
+        // that is gone). The Dart `inactive` handler stays as a backup:
+        // it is guarded by !_inPip, so it stands down once this window
+        // opens.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            isPlaying && !isInPictureInPictureMode
+        ) {
+            updatePipActions()
+            val builder = PictureInPictureParams.Builder()
+            builder.setActions(createPipActions())
+            pipAspectRatio?.let { builder.setAspectRatio(it) }
+            enterPictureInPictureMode(builder.build())
+        }
     }
 
     override fun onTrimMemory(level: Int) {

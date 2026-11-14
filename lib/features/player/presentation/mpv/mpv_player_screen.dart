@@ -499,6 +499,11 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _prebufferTimer?.cancel();
     _stallTimer?.cancel();
     _pipWatchdog?.cancel();
+    // The native side remembers the last synced playing state (see the
+    // playing listener): clear it now, or a film left playing would make
+    // MainActivity open a PiP window for a player that no longer exists
+    // the next time the viewer presses Home from another screen.
+    _platform.syncPipState(false);
     // The channel handler closes over this screen; without the detach it
     // would keep routing PiP buttons into a disposed player.
     _platform.detachPipListener();
@@ -835,14 +840,16 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.playing.listen((playing) {
         if (_disposed) return;
         _playing = playing;
-        // Keeps the PiP window's play/pause button in sync while the
-        // window is open. Not worth the platform call while it is not.
-        if (_inPip) {
-          _platform.syncPipState(
-            playing,
-            videoSize: _adapter.value.videoSize,
-          );
-        }
+        // Keeps the native side's picture-in-picture state current at all
+        // times, not only while a window is open: MainActivity enters PiP
+        // itself from onUserLeaveHint when the viewer swipes home, and it
+        // can only do that if it knows the film is playing. One channel
+        // call per play/pause flip is the price; the play/pause icon in
+        // the window rides on the same sync.
+        _platform.syncPipState(
+          playing,
+          videoSize: _adapter.value.videoSize,
+        );
         if (playing) {
           final firstPlay = !_startedPlaying;
           _startedPlaying = true;
