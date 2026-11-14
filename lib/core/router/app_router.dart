@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:skystream/features/home/presentation/home_screen.dart';
@@ -10,12 +11,12 @@ import 'package:skystream/features/addons/presentation/addons_screen.dart';
 import 'package:skystream/features/addons/presentation/addon_detail_screen.dart';
 import 'package:skystream/features/addons/presentation/addon_catalog_screen.dart';
 import 'package:skystream/features/settings/presentation/settings_screen.dart';
-// v18 (2.9.17) test build: the player route points at the mpv engine
-// (MpvPlayerScreen) so the user can compare it with v17 (libVLC). The VLC
-// screen stays in the repo untouched; to go back, point PlayerRoute at
-// VlcPlayerScreen again (import
-// features/player/presentation/vlc/vlc_player_screen.dart).
+// The player route reads the Player Engine setting once when the player
+// opens and shows the matching screen: MpvPlayerScreen (the Golden player)
+// for libmpv, VlcPlayerScreen for libVLC. See _PlayerEngineScreen below.
+import 'package:skystream/features/player/presentation/vlc/vlc_player_screen.dart';
 import 'package:skystream/features/player/presentation/mpv/mpv_player_screen.dart';
+import 'package:skystream/features/settings/presentation/player_settings_provider.dart';
 import '../../features/extensions/screens/extensions_screen.dart';
 import '../../features/nuvio/presentation/nuvio_plugins_screen.dart';
 import '../../features/cloudstream/presentation/cloudstream_screen.dart';
@@ -527,12 +528,7 @@ class PlayerRoute extends GoRouteData with $PlayerRoute {
 
   @override
   Widget build(BuildContext context, GoRouterState state) {
-    return MpvPlayerScreen(
-      item: $extra.item,
-      videoUrl: $extra.videoUrl,
-      episode: $extra.episode,
-      preloadedStreams: $extra.preloadedStreams,
-    );
+    return _PlayerEngineScreen(extra: $extra);
   }
 
   // Same smooth slide + fade as every other pushed page (see
@@ -540,6 +536,54 @@ class PlayerRoute extends GoRouteData with $PlayerRoute {
   @override
   Page<void> buildPage(BuildContext context, GoRouterState state) =>
       smoothPage(key: state.pageKey, child: build(context, state));
+}
+
+/// The player route's engine switch.
+///
+/// Reads the Player Engine setting ONCE, when the route is created, and
+/// shows the matching screen: the Golden mpv player for libmpv (the
+/// default), the libVLC player for libVLC. A change to the setting while a
+/// video is playing never swaps the engine under it — it takes effect on
+/// the NEXT play. Both screens take the same route extra, so the switch is
+/// only which screen is built.
+class _PlayerEngineScreen extends ConsumerStatefulWidget {
+  const _PlayerEngineScreen({required this.extra});
+
+  final PlayerRouteExtra extra;
+
+  @override
+  ConsumerState<_PlayerEngineScreen> createState() =>
+      _PlayerEngineScreenState();
+}
+
+class _PlayerEngineScreenState extends ConsumerState<_PlayerEngineScreen> {
+  late final PlayerEngine _engine;
+
+  @override
+  void initState() {
+    super.initState();
+    _engine =
+        ref.read(playerSettingsProvider).asData?.value.playerEngine ??
+        PlayerEngine.mpv;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return switch (_engine) {
+      PlayerEngine.mpv => MpvPlayerScreen(
+        item: widget.extra.item,
+        videoUrl: widget.extra.videoUrl,
+        episode: widget.extra.episode,
+        preloadedStreams: widget.extra.preloadedStreams,
+      ),
+      PlayerEngine.vlc => VlcPlayerScreen(
+        item: widget.extra.item,
+        videoUrl: widget.extra.videoUrl,
+        episode: widget.extra.episode,
+        preloadedStreams: widget.extra.preloadedStreams,
+      ),
+    };
+  }
 }
 
 @TypedGoRoute<AddonDetailRoute>(path: '/addon-detail')

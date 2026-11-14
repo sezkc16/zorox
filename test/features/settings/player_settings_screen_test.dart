@@ -88,6 +88,12 @@ void main() {
     for (final String title in gestureRowTitles()) {
       final Finder row = find.text(title);
       expect(row, findsOneWidget, reason: title);
+      // The list scrolls: a row below the fold is still present and laid
+      // out, it just needs scrolling into view first (the Player Engine
+      // tile sits above these rows and pushes the last one past 390 px in
+      // this landscape viewport). Scroll, then check it lands on screen.
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
       final Rect rect = tester.getRect(row);
       expect(rect.height, greaterThan(0), reason: title);
       expect(rect.width, greaterThan(0), reason: title);

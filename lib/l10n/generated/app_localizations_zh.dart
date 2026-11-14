@@ -96,6 +96,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get defaultPlayer => '默认播放器';
 
   @override
+  String get playerEngine => 'Player Engine';
+
+  @override
+  String get playerEngineMpvDetail => 'Golden player · PiP on Android';
+
+  @override
+  String get playerEngineVlcDetail => 'PiP on Android & iOS';
+
+  @override
+  String get playerEngineNextVideo => 'Takes effect on the next video';
+
+  @override
   String get leftGesture => '左侧手势';
 
   @override

@@ -345,6 +345,30 @@ abstract class AppLocalizations {
   /// **'Default Player'**
   String get defaultPlayer;
 
+  /// No description provided for @playerEngine.
+  ///
+  /// In en, this message translates to:
+  /// **'Player Engine'**
+  String get playerEngine;
+
+  /// No description provided for @playerEngineMpvDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Golden player · PiP on Android'**
+  String get playerEngineMpvDetail;
+
+  /// No description provided for @playerEngineVlcDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'PiP on Android & iOS'**
+  String get playerEngineVlcDetail;
+
+  /// No description provided for @playerEngineNextVideo.
+  ///
+  /// In en, this message translates to:
+  /// **'Takes effect on the next video'**
+  String get playerEngineNextVideo;
+
   /// No description provided for @leftGesture.
   ///
   /// In en, this message translates to:

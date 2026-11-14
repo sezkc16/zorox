@@ -76,6 +76,25 @@ class PlayerSettingsScreen extends ConsumerWidget {
                       playerSettings.preferredPlayer,
                     ),
                   ),
+                  // Player Engine (libmpv / libVLC): which engine plays the
+                  // next video. libmpv is the Golden player (PiP on Android
+                  // only); libVLC is the only engine that can do PiP on
+                  // iOS. Takes effect on the next play.
+                  SettingsTile(
+                    icon: Icons.memory_rounded,
+                    title: l10n.playerEngine,
+                    subtitle: switch (playerSettings.playerEngine) {
+                      PlayerEngine.mpv =>
+                        'libmpv · ${l10n.playerEngineMpvDetail}',
+                      PlayerEngine.vlc =>
+                        'libVLC · ${l10n.playerEngineVlcDetail}',
+                    },
+                    onTap: () => showPlayerEngineDialog(
+                      context,
+                      ref,
+                      playerSettings.playerEngine,
+                    ),
+                  ),
                   if (isTouchDevice) ...[
                     SettingsTile(
                       icon: Icons.swipe_vertical_rounded,
