@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:skystream/core/providers/device_info_provider.dart';
+import 'package:skystream/core/utils/boot_trace.dart';
 import 'package:skystream/core/utils/layout_constants.dart';
 import 'package:skystream/core/utils/responsive_breakpoints.dart';
 import 'package:skystream/shared/widgets/custom_bottom_nav.dart';
@@ -292,6 +293,8 @@ class _AppScaffoldState extends ConsumerState<AppScaffold>
 
   @override
   Widget build(BuildContext context) {
+    // v20+20 diagnostic: boot-trace marker (once per launch).
+    BootTrace.markOnce('appscaffold-build', 'APPSCAFFOLD build start');
     final deviceProfileAsync = ref.watch(deviceProfileProvider);
     final defaultHome = ref.watch(
       generalSettingsProvider.select((s) => s.defaultHomeScreen),
@@ -449,20 +452,9 @@ class _AppScaffoldState extends ConsumerState<AppScaffold>
                   ),
                   child: _branchTransition(),
                 ),
-                // Lower than the package position (see [CustomBottomNavBar.lowerBy]
-                // and [CustomBottomNavBar.extraLowerBy]): the pill hugs the
-                // bottom edge instead of floating mid-row — on iOS the extra
-                // shift drops it to the same spot as on Android.
-                Transform.translate(
-                  offset: Offset(
-                    0,
-                    CustomBottomNavBar.lowerBy +
-                        CustomBottomNavBar.extraLowerBy(context),
-                  ),
-                  child: CustomBottomNavBar(
-                    currentIndex: widget.navigationShell.currentIndex,
-                    onTap: (index) => _onItemTapped(index, context),
-                  ),
+                CustomBottomNavBar(
+                  currentIndex: widget.navigationShell.currentIndex,
+                  onTap: (index) => _onItemTapped(index, context),
                 ),
               ],
             ),

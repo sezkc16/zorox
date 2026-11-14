@@ -25,6 +25,7 @@ import 'core/network/doh_service.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 
 import 'core/utils/app_utils.dart';
+import 'core/utils/boot_trace.dart';
 import 'core/utils/linux_wakelock.dart';
 import 'features/player/domain/subtitle_fonts.dart';
 import 'features/extensions/providers/extensions_controller.dart';
@@ -73,12 +74,21 @@ void main() async {
 
   WidgetsFlutterBinding.ensureInitialized();
 
+  // v20+20 diagnostic: persistent boot trace for the +18/+19 loading
+  // freeze. Never throws; if it fails we just get stderr-only logging.
+  await BootTrace.init();
+  BootTrace.mark('MAIN start');
+  BootTrace.startHeartbeat();
+
   // The mpv engine (v18 test build): loads the bundled libmpv before any
   // Player is created. A failure must never stop startup — the player screen
   // surfaces it instead. (The VLC engine does not need this.)
+  BootTrace.mark('MEDIAKIT before');
   try {
     MediaKit.ensureInitialized();
+    BootTrace.mark('MEDIAKIT after');
   } catch (e) {
+    BootTrace.mark('MEDIAKIT ERROR: $e');
     if (kDebugMode) debugPrint('MediaKit.ensureInitialized failed: $e');
   }
 
@@ -86,7 +96,9 @@ void main() async {
   // before the first player is created - libVLC's freetype reads a path,
   // not the app's font families. A failure leaves the engine on its own
   // default face; it never stops startup (see `subtitle_fonts.dart`).
+  BootTrace.mark('FONTS before');
   await prepareBundledSubtitleFonts();
+  BootTrace.mark('FONTS after');
 
   // Before anything keeps the screen awake: Linux's wakelock leaked an
   // inhibitor on each repeated enable (see linux_wakelock.dart).
@@ -145,8 +157,10 @@ void main() async {
   // rule cannot see through.
   // ignore: riverpod_lint/missing_provider_scope
   AppUtils.setRestartFunction(() => runApp(const AppRoot()));
+  BootTrace.mark('RUNAPP before');
   // ignore: riverpod_lint/missing_provider_scope
   runApp(const AppRoot());
+  BootTrace.mark('RUNAPP returned');
 }
 
 class AppRoot extends StatefulWidget {
@@ -165,6 +179,7 @@ class _AppRootState extends State<AppRoot> {
   @override
   void initState() {
     super.initState();
+    BootTrace.mark('APPROOT initState');
     _init();
   }
 
@@ -179,20 +194,26 @@ class _AppRootState extends State<AppRoot> {
   /// still rethrows so the outer catch shows the error screen.
   Future<void> _initWithTimeout(Future<void> future, String name) async {
     final stopwatch = Stopwatch()..start();
+    BootTrace.mark('$name START');
     try {
       await future.timeout(
         _initTimeout,
         onTimeout: () {
+          BootTrace.mark(
+            '$name TIMEOUT after ${_initTimeout.inSeconds}s — proceeding',
+          );
           debugPrint(
             '[AppRoot] INIT TIMEOUT: $name did not finish in '
             '${_initTimeout.inSeconds}s — proceeding without it',
           );
         },
       );
+      BootTrace.mark('$name DONE (${stopwatch.elapsedMilliseconds}ms)');
       debugPrint(
         '[AppRoot] init ok: $name (${stopwatch.elapsedMilliseconds}ms)',
       );
     } catch (e) {
+      BootTrace.mark('$name FAILED: $e');
       debugPrint('[AppRoot] INIT FAILED: $name — $e');
       rethrow;
     }
@@ -200,6 +221,7 @@ class _AppRootState extends State<AppRoot> {
 
   Future<void> _init() async {
     _storageService = StorageService();
+    BootTrace.mark('INIT start');
     try {
       await Future.wait([
         _initWithTimeout(_storageService.init(), 'StorageService.init'),
@@ -211,6 +233,7 @@ class _AppRootState extends State<AppRoot> {
             if (kDebugMode) debugPrint("Error setting high refresh rate: $e");
           }),
       ]);
+      BootTrace.mark('INIT all futures done');
 
       // The developer option's QoE switch, kept across launches.
       // Guarded: if storage init timed out above, its boxes may not be open
@@ -220,18 +243,21 @@ class _AppRootState extends State<AppRoot> {
       } catch (e) {
         debugPrint('[AppRoot] getDevQoeLog failed (storage may have timed out): $e');
       }
+      BootTrace.mark('INIT getDevQoeLog done');
 
       if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
         final alwaysOnTop = _storageService.isAlwaysOnTop();
         await windowManager.setAlwaysOnTop(alwaysOnTop);
       }
 
+      BootTrace.mark('INIT setting _initialized=true');
       if (mounted) {
         setState(() {
           _initialized = true;
         });
       }
     } catch (e, stack) {
+      BootTrace.mark('INIT FAILED: $e');
       if (mounted) {
         setState(() {
           _error = e;
@@ -244,6 +270,7 @@ class _AppRootState extends State<AppRoot> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
+      BootTrace.markOnce('launch-error', 'APPROOT error screen shown');
       return LaunchErrorApp(
         error: _error!,
         stackTrace: _stackTrace,
@@ -252,6 +279,7 @@ class _AppRootState extends State<AppRoot> {
     }
 
     if (!_initialized) {
+      BootTrace.markOnce('loading-screen', 'APPROOT loading screen shown');
       return Directionality(
         textDirection: TextDirection.ltr,
         child: DynamicColorBuilder(
@@ -268,6 +296,10 @@ class _AppRootState extends State<AppRoot> {
       );
     }
 
+    BootTrace.markOnce(
+      'provider-scope',
+      'APPROOT initialized — building ProviderScope',
+    );
     return ProviderScope(
       // The app's root scope - below AppRoot only because storage has to open
       // first - so there is no parent scope for dependencies to describe.
@@ -295,6 +327,7 @@ class _MyAppState extends ConsumerState<MyApp> {
   @override
   void initState() {
     super.initState();
+    BootTrace.mark('MYAPP initState');
     FocusManager.instance.addEarlyKeyEventHandler(_handleEarlyKeyEvent);
     // Brings back the ten-foot layout if the last session was left in it.
     // Applied here rather than in `main` because it reads through a provider,
@@ -563,6 +596,7 @@ class _MyAppState extends ConsumerState<MyApp> {
 
   @override
   Widget build(BuildContext context) {
+    BootTrace.markOnce('myapp-build', 'MYAPP build start');
     final themeMode = ref.watch(appThemeModeProvider);
     final accent = ref.watch(accentColorProvider);
     final appRouter = ref.watch(appRouterProvider);

@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_bottom_nav/liquid_glass_bottom_nav.dart';
 import 'package:reicons/reicons.dart';
+import 'package:skystream/core/utils/boot_trace.dart';
 import 'package:skystream/l10n/generated/app_localizations.dart';
 
 /// The app's bottom navigation, built on the `liquid_glass_bottom_nav`
@@ -52,35 +52,6 @@ class CustomBottomNavBar extends StatelessWidget {
   /// no separate bottom offset.
   static const double _kBottomMargin = 8.0;
 
-  /// How far the pill sits below the package position. The package's
-  /// `insets` also scales the pill's padding, corner radius and side
-  /// margins, so lowering `insets` further would shrink the pill itself;
-  /// the shell shifts it down by this much instead, keeping the pill's
-  /// look (glass, gold active, icons, labels) unchanged. 8 sits the pill
-  /// right above the home-indicator zone — before [extraLowerBy].
-  static const double lowerBy = 8.0;
-
-  /// The bottom gap the pill keeps from the physical screen edge on
-  /// Android (gesture nav): the package already places the pill that
-  /// far up, so on Android the pill hugs the bottom edge as the user
-  /// wants. On iOS the safe area is ~34pt (home indicator), so the
-  /// same rule floats the pill 34pt up instead — the user drew a blue
-  /// mark in the strip below the pill and asked for the bar there, so
-  /// on iOS the pill drops to this small gap from the edge instead of
-  /// the Android-matched 16pt: 8pt reads as hugging the bottom edge.
-  static const double _kTargetBottomGap = 8.0;
-
-  /// Extra downward shift the shell adds on iOS only, so the pill
-  /// lands at [_kTargetBottomGap] from the bottom edge (iPhone 15 Pro
-  /// Max: 34 − 8 = 26). Android returns 0 — its position does not
-  /// move at all. The content reserve ([bottomInsetFor]) is unchanged,
-  /// so the last content row still clears the bar with room to spare.
-  static double extraLowerBy(BuildContext context) {
-    if (defaultTargetPlatform != TargetPlatform.iOS) return 0.0;
-    final bottom = MediaQuery.viewPaddingOf(context).bottom;
-    return math.max(bottom - _kTargetBottomGap, 0.0);
-  }
-
   /// Vertical space the floating nav occupies above the system bottom
   /// inset — the shell reserves this so content clears the bar. The
   /// package's [LiquidGlassNavBar.contentBottomInset] (96) is pill 68 +
@@ -97,6 +68,11 @@ class CustomBottomNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // v20+20 diagnostic: boot-trace marker (once per launch).
+    BootTrace.markOnce(
+      'custombottomnav-build',
+      'CUSTOMBOTTOMNAV build start',
+    );
     final localizations = AppLocalizations.of(context)!;
     final colorScheme = Theme.of(context).colorScheme;
     return LiquidGlassNavBar(
