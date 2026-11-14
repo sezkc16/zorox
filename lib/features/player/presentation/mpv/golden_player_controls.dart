@@ -1258,7 +1258,6 @@ class _TopBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasSubs = hasSubtitles;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -1310,25 +1309,6 @@ class _TopBar extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        // Subtitle style (CC). Only where there is a subtitle to style.
-        if (hasSubs == null)
-          GoldenIconButton(
-            icon: Icons.closed_caption_outlined,
-            onPressed: onOpenSubtitleStyle,
-            tooltip: 'Subtitles',
-          )
-        else
-          ValueListenableBuilder<bool>(
-            valueListenable: hasSubs,
-            builder: (context, has, _) => has
-                ? GoldenIconButton(
-                    icon: Icons.closed_caption_outlined,
-                    onPressed: onOpenSubtitleStyle,
-                    tooltip: 'Subtitles',
-                  )
-                : const SizedBox.shrink(),
-          ),
-        const SizedBox(width: 8),
         if (isSeries)
           GoldenIconButton(
             icon: Icons.list_rounded,
@@ -1345,131 +1325,6 @@ class _TopBar extends StatelessWidget {
             tooltip: 'Picture-in-picture',
           ),
         if (onEnterPip != null) const SizedBox(width: 8),
-        _MoreMenu(
-          onOpenAudioSources: onOpenAudioSources,
-          onOpenSources: onOpenSources,
-          onOpenSubtitleStyle: onOpenSubtitleStyle,
-          onPickSpeed: onPickSpeed,
-          onCycleFit: onCycleFit,
-          onRotate: onRotate,
-        ),
-      ],
-    );
-  }
-}
-
-/// The More menu: Audio, Sources, Subtitle style, Speed, Aspect, Rotate.
-class _MoreMenu extends StatelessWidget {
-  const _MoreMenu({
-    required this.onOpenAudioSources,
-    required this.onOpenSources,
-    required this.onOpenSubtitleStyle,
-    required this.onPickSpeed,
-    required this.onCycleFit,
-    required this.onRotate,
-  });
-
-  final VoidCallback onOpenAudioSources;
-  final VoidCallback onOpenSources;
-  final VoidCallback onOpenSubtitleStyle;
-  final VoidCallback onPickSpeed;
-  final VoidCallback onCycleFit;
-  final VoidCallback? onRotate;
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<String>(
-      color: GoldenPlayerColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(GoldenPlayerRadii.card),
-        side: const BorderSide(color: GoldenPlayerColors.divider),
-      ),
-      onSelected: (choice) {
-        switch (choice) {
-          case 'audio':
-            onOpenAudioSources();
-          case 'sources':
-            onOpenSources();
-          case 'subtitles':
-            onOpenSubtitleStyle();
-          case 'speed':
-            onPickSpeed();
-          case 'aspect':
-            onCycleFit();
-          case 'rotate':
-            onRotate?.call();
-        }
-      },
-      itemBuilder: (context) => <PopupMenuEntry<String>>[
-        const PopupMenuItem<String>(
-          value: 'audio',
-          child: _MenuLabel(
-            icon: Icons.audiotrack_rounded,
-            text: 'Audio',
-          ),
-        ),
-        const PopupMenuItem<String>(
-          value: 'sources',
-          child: _MenuLabel(
-            icon: Icons.dns_rounded,
-            text: 'Sources',
-          ),
-        ),
-        const PopupMenuItem<String>(
-          value: 'subtitles',
-          child: _MenuLabel(
-            icon: Icons.closed_caption_outlined,
-            text: 'Subtitle style',
-          ),
-        ),
-        const PopupMenuItem<String>(
-          value: 'speed',
-          child: _MenuLabel(
-            icon: Icons.speed_rounded,
-            text: 'Playback speed',
-          ),
-        ),
-        const PopupMenuItem<String>(
-          value: 'aspect',
-          child: _MenuLabel(
-            icon: Icons.aspect_ratio_rounded,
-            text: 'Aspect ratio',
-          ),
-        ),
-        if (onRotate != null)
-          const PopupMenuItem<String>(
-            value: 'rotate',
-            child: _MenuLabel(
-              icon: Icons.screen_rotation_rounded,
-              text: 'Rotate',
-            ),
-          ),
-      ],
-      child: const GoldenIconButton(
-        icon: Icons.more_vert_rounded,
-        onPressed: null,
-        tooltip: 'More',
-      ),
-    );
-  }
-}
-
-class _MenuLabel extends StatelessWidget {
-  const _MenuLabel({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: <Widget>[
-        Icon(icon, size: 18, color: GoldenPlayerColors.gold),
-        const SizedBox(width: 10),
-        Text(
-          text,
-          style: const TextStyle(color: GoldenPlayerColors.textPrimary),
-        ),
       ],
     );
   }
