@@ -244,7 +244,7 @@
       }
     }
   },
-  "internalPlayer": "Internal (mpv)",
+  "internalPlayer": "Internal (VLC)",
   "builtInPlayer": "Built-in player",
   "customNotSet": "Custom (not set)",
   "selectGesture": "Select {side} Gesture",

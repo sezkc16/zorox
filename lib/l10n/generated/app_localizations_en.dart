@@ -485,7 +485,7 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get internalPlayer => 'Internal (mpv)';
+  String get internalPlayer => 'Internal (VLC)';
 
   @override
   String get builtInPlayer => 'Built-in player';
