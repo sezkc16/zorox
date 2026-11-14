@@ -114,9 +114,16 @@ class _GoldenSubtitleStyleDrawerState
     final revision = widget.controller.value.trackRevision;
     final tracks = await widget.controller.getSubtitleTracks();
     if (!mounted) return;
+    // Guard against an engine that reports one id twice: two rows with
+    // one key make Flutter reuse the wrong element and the rows
+    // ghost/overlap on rebuild. First occurrence wins.
+    final seenIds = <int>{};
+    final deduped = tracks
+        .where((track) => seenIds.add(track.id))
+        .toList(growable: false);
     setState(() {
       _trackRevision = revision;
-      _tracks = tracks;
+      _tracks = deduped;
     });
   }
 
@@ -161,7 +168,7 @@ class _GoldenSubtitleStyleDrawerState
                       widget.controller.value.activeSubtitleTrackId,
                   onTap: () => _pickTrack(track.id),
                 ),
-              if (_tracks.isEmpty)
+              if (_tracks.isEmpty) ...[
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
                   child: Text(
@@ -172,13 +179,17 @@ class _GoldenSubtitleStyleDrawerState
                     ),
                   ),
                 ),
-              // Re-read the track list from the engine (the manual
-              // fallback when it never reported a change).
-              _ActionRow(
-                icon: Icons.refresh_rounded,
-                label: 'Retry',
-                onTap: _refreshTracks,
-              ),
+                // Re-read the track list from the engine — only here,
+                // when nothing loaded at all. A Retry row under a live
+                // list rides up and down as tracks arrive and reads as
+                // flicker; a failed load is the one case it helps.
+                _ActionRow(
+                  key: const ValueKey('subtitle-retry'),
+                  icon: Icons.refresh_rounded,
+                  label: 'Retry',
+                  onTap: _refreshTracks,
+                ),
+              ],
               const GoldenSectionLabel('Subtitle options'),
               _ActionRow(
                 icon: Icons.file_open_outlined,
@@ -510,6 +521,7 @@ class _SubtitleTrackTile extends StatelessWidget {
 /// online): gold icon + label, compact like the track rows.
 class _ActionRow extends StatelessWidget {
   const _ActionRow({
+    super.key,
     required this.icon,
     required this.label,
     required this.onTap,

@@ -63,6 +63,217 @@ List<T> deduplicateByKey<T, K>(List<T> items, K Function(T) key) {
   return out;
 }
 
+/// One subtitle row as the drawer shows it: a single logical subtitle,
+/// backed by an mpv embedded track, a plugin side-car file, or both.
+///
+/// An mpv embedded HLS track and a plugin side-car file of the same
+/// language and title are the same subtitle in two forms — the streamed
+/// rendition and the downloaded file — so they merge into one row and
+/// the side-car wins: it is the file the screen manages and the pick
+/// the screen remembers, and its id (1000+) is stable while mpv's list
+/// re-orders as an HLS master settles.
+class SubtitleRow {
+  const SubtitleRow({
+    required this.id,
+    required this.name,
+    required this.language,
+    required this.mergeKey,
+    this.embedded,
+    this.external,
+  });
+
+  /// The id the drawer shows and the tap sets: the embedded track's mpv
+  /// sid, or the side-car's 1000+ id.
+  final int id;
+
+  /// The row's display name.
+  final String name;
+
+  /// The language, as the source reported it.
+  final String? language;
+
+  /// The identity this row merged under (see [subtitleMergeKey]).
+  final (String, String) mergeKey;
+
+  /// The mpv track to play when this row is picked and it has no
+  /// side-car file. Null on a side-car row.
+  final SubtitleTrack? embedded;
+
+  /// The side-car file to play when this row is picked. Null on an
+  /// embedded-only row. Wins over [embedded]: the row is the file's row.
+  final SubtitleFile? external;
+}
+
+/// The merge key of a subtitle: its language as an ISO 639-1 code, and
+/// its title with the language itself taken out and every decoration
+/// stripped — so `English - (Crunchyroll)` and
+/// `English (- (Crunchyroll))` share a key, `English 2` does not share
+/// `English`'s (the `2` survives as the distinguisher), and neither
+/// does `English (SDH)`. The language is read from the language field
+/// first and from the title when the engine reports none (`auto`).
+/// Pure, so the rule is testable without a player.
+(String, String) subtitleMergeKey({
+  required String? language,
+  required String title,
+}) {
+  final code =
+      languageCodeOf(language) ?? languageCodeOfTrackName(title) ?? '';
+  final words = RegExp(r'[\p{L}\p{M}0-9]+', unicode: true)
+      .allMatches(title.toLowerCase())
+      .map((m) => m[0]!)
+      // Drop the words that ARE the language (`English`, `Português`,
+      // `Español`); what is left is what tells this subtitle apart.
+      .where((w) => code.isEmpty || languageCodeOf(w) != code)
+      .join();
+  return (code, words);
+}
+
+/// The subtitle row's display name: the track's title with its language
+/// in brackets, as the original shows — `MoviesDrives.bid - [English]`.
+/// mpv (media_kit) reports the title and the language separately, and
+/// the panel's `trackLabel` returns a non-empty title as-is, so the
+/// language was lost and every row read the same bare title. The
+/// language is appended here, where the adapter owns the mapping.
+/// Pure, so it is testable without a player.
+String subtitleDisplayName({
+  required String? title,
+  required String? language,
+  required String fallback,
+}) {
+  final name = (title ?? '').trim();
+  final lang = _subtitleLanguageName(language) ?? _subtitleLanguageFromTitle(name);
+  if (name.isNotEmpty) {
+    if (lang != null && !_subtitleTitleHasLanguage(name, lang)) {
+      return '$name - [$lang]';
+    }
+    return name;
+  }
+  if (lang != null) return lang;
+  return fallback;
+}
+
+/// The language name for a track's language code or label, or null when
+/// it names none known here. Mirrors the panel's own `_languageName`
+/// (player_panel_labels.dart): a code maps to its English name, a name
+/// passes through, `und` (unknown) is nothing.
+String? _subtitleLanguageName(String? language) {
+  final value = language?.trim();
+  if (value == null || value.isEmpty || value.toLowerCase() == 'und') {
+    return null;
+  }
+  final mapped = languageNameForCode(value);
+  if (mapped != null) return mapped;
+  if (value.length > 3) return value;
+  return value.toUpperCase();
+}
+
+/// The language a track's title itself carries, e.g. `[Hindi]` in
+/// `Track 1 - [Hindi]` — the fallback when media_kit reports no
+/// language for the track. `languageCodeOf` reads a bracketed name out
+/// of a label.
+String? _subtitleLanguageFromTitle(String title) {
+  final code = languageCodeOf(title);
+  if (code == null) return null;
+  return languageNameForCode(code);
+}
+
+/// Whether the title already carries its language (in brackets, or as a
+/// word), so the display name does not read it twice.
+bool _subtitleTitleHasLanguage(String title, String language) {
+  final lowered = title.toLowerCase();
+  final lang = language.toLowerCase();
+  return lowered.contains('[$lang]') || lowered.contains(lang);
+}
+
+/// Merges mpv's embedded subtitle tracks with the screen's side-car
+/// subtitle files into the drawer's rows: one row per logical subtitle.
+///
+/// mpv reports one embedded track per HLS rendition, and the provider
+/// ships the same subtitles as side-car files, so without this the
+/// drawer lists each subtitle twice — the streamed `[auto]` row and the
+/// `(source)` row — and the list grows as the HLS master settles and
+/// mpv discovers more renditions. Two tracks merge when they share a
+/// [subtitleMergeKey]; the side-car wins the merge, and embedded-only
+/// tracks keep their mpv sid. The list is built fresh from the live
+/// lists on every read, so a track mpv discovers later merges into the
+/// same set instead of appending a duplicate row. Pure, so the rule is
+/// testable without a player.
+List<SubtitleRow> mergeSubtitleRows({
+  required List<SubtitleTrack> embedded,
+  required List<SubtitleFile> external,
+}) {
+  // The side-car files, indexed by merge key — an embedded track whose
+  // key matches one is the same subtitle in its streamed form.
+  final externalByKey = <(String, String), int>{};
+  for (var i = 0; i < external.length; i++) {
+    externalByKey.putIfAbsent(
+      subtitleMergeKey(language: external[i].lang, title: external[i].label),
+      () => i,
+    );
+  }
+  final rows = <SubtitleRow>[];
+  final usedExternal = <int>{};
+  final seenKeys = <(String, String)>{};
+  for (var i = 0; i < embedded.length; i++) {
+    final track = embedded[i];
+    final key = subtitleMergeKey(
+      language: track.language,
+      title: track.title ?? '',
+    );
+    // An embedded twin of a track already emitted (mpv reporting the
+    // same content under a slightly different title/language) is not a
+    // second row.
+    if (!seenKeys.add(key)) continue;
+    final match = externalByKey[key];
+    if (match != null) {
+      usedExternal.add(match);
+      final file = external[match];
+      rows.add(
+        SubtitleRow(
+          id: _externalIdBase + match,
+          name: '${file.label} (source)',
+          language: file.lang,
+          mergeKey: key,
+          embedded: track,
+          external: file,
+        ),
+      );
+    } else {
+      rows.add(
+        SubtitleRow(
+          id: int.tryParse(track.id) ?? i,
+          name: subtitleDisplayName(
+            title: track.title,
+            language: track.language,
+            fallback: 'Subtitle',
+          ),
+          language: track.language,
+          mergeKey: key,
+          embedded: track,
+        ),
+      );
+    }
+  }
+  // Side-car files with no embedded twin, in their own order.
+  for (var i = 0; i < external.length; i++) {
+    if (usedExternal.contains(i)) continue;
+    final file = external[i];
+    rows.add(
+      SubtitleRow(
+        id: _externalIdBase + i,
+        name: '${file.label} (source)',
+        language: file.lang,
+        mergeKey: subtitleMergeKey(
+          language: file.lang,
+          title: file.label,
+        ),
+        external: file,
+      ),
+    );
+  }
+  return rows;
+}
+
 /// How near a seek's target the reported position must land for the pending
 /// seek to count as arrived.
 const Duration _kSeekLandedWithin = Duration(seconds: 3);
@@ -329,6 +540,16 @@ class MpvVlcController implements VlcPlayerController {
   List<SubtitleFile> get _externalSubtitlesDeduped =>
       deduplicateByKey(_externalSubtitles(), (f) => f.url);
 
+  /// The drawer's subtitle rows: the merged snapshot every id maps
+  /// against — get, set and active all read it — so a shown id always
+  /// selects the track it names, and a track mpv discovers later merges
+  /// into the same set instead of appending a duplicate row. Built fresh
+  /// from the live lists on every read.
+  List<SubtitleRow> get _subtitleRows => mergeSubtitleRows(
+    embedded: _embeddedSubtitles,
+    external: _externalSubtitlesDeduped,
+  );
+
   /// A track's id as the drawer (and the screen's remembered pick) knows
   /// it: mpv's real track id — the `aid` / `sid` — not the track's
   /// position in the list. media_kit reports the mpv id as a string
@@ -388,16 +609,25 @@ class MpvVlcController implements VlcPlayerController {
   int? _activeSubtitleId() {
     final current = _player.state.track.subtitle;
     if (current.id == 'no') return null;
+    final rows = _subtitleRows;
     if (current.id == 'auto') {
       // mpv auto-selected: it plays the default-flagged subtitle track,
       // else the first one — the same rule mpv itself uses. The engine
       // never reports which one it picked, so resolve it here, or the
       // drawer would read "Off" while a subtitle renders. The id
-      // returned is the track's real mpv sid.
+      // returned is the merged row's id, so a track that merged into
+      // its (source) row lights that row.
       final embedded = _embeddedSubtitles;
       if (embedded.isEmpty) return null;
       final def = embedded.indexWhere((t) => t.isDefault == true);
       final track = embedded[def >= 0 ? def : 0];
+      final key = subtitleMergeKey(
+        language: track.language,
+        title: track.title ?? '',
+      );
+      for (final row in rows) {
+        if (row.mergeKey == key) return row.id;
+      }
       return _trackId(track.id, def >= 0 ? def : 0);
     }
     // An external file the screen added: mpv reports it under its title.
@@ -408,65 +638,29 @@ class MpvVlcController implements VlcPlayerController {
     if (externalIndex >= 0) return _externalIdBase + externalIndex;
     // mpv's own word for the track playing: its sid, read back from the
     // engine — never the position in a list that may since have moved.
-    return int.tryParse(current.id);
-  }
-
-  /// The language name for a track's language code or label, or null when
-  /// it names none known here. Mirrors the panel's own `_languageName`
-  /// (player_panel_labels.dart): a code maps to its English name, a name
-  /// passes through, `und` (unknown) is nothing.
-  String? _languageName(String? language) {
-    final value = language?.trim();
-    if (value == null || value.isEmpty || value.toLowerCase() == 'und') {
-      return null;
+    // Mapped through the merged rows, so a track that merged into its
+    // (source) row lights that row instead of none.
+    final sid = int.tryParse(current.id);
+    if (sid == null) return null;
+    for (final row in rows) {
+      if (row.embedded != null && row.embedded!.id == current.id) {
+        return row.id;
+      }
     }
-    final mapped = languageNameForCode(value);
-    if (mapped != null) return mapped;
-    if (value.length > 3) return value;
-    return value.toUpperCase();
+    return sid;
   }
 
-  /// The language a track's title itself carries, e.g. `[Hindi]` in
-  /// `Track 1 - [Hindi]` — the fallback when media_kit reports no
-  /// language for the track. `languageCodeOf` reads a bracketed name out
-  /// of a label.
-  String? _languageFromTitle(String title) {
-    final code = languageCodeOf(title);
-    if (code == null) return null;
-    return languageNameForCode(code);
-  }
-
-  /// Whether the title already carries its language (in brackets, or as a
-  /// word), so the display name does not read it twice.
-  bool _titleHasLanguage(String title, String language) {
-    final lowered = title.toLowerCase();
-    final lang = language.toLowerCase();
-    return lowered.contains('[$lang]') || lowered.contains(lang);
-  }
-
-  /// The audio/subtitle row's display name: the track's title with its
-  /// language in brackets, as the original shows — `MoviesDrives.bid -
-  /// [English]`. libVLC folds the language into the track name itself;
-  /// mpv (media_kit) reports the title and the language separately, and
-  /// the panel's `trackLabel` returns a non-empty title as-is, so the
-  /// language was lost and every row read the same bare title. The
-  /// language is appended here, where the adapter owns the mapping.
+  /// The audio/subtitle row's display name — see [subtitleDisplayName].
   String _trackDisplayName({
     required String? title,
     required String? language,
     required String fallback,
-  }) {
-    final name = (title ?? '').trim();
-    final lang = _languageName(language) ?? _languageFromTitle(name);
-    if (name.isNotEmpty) {
-      if (lang != null && !_titleHasLanguage(name, lang)) {
-        return '$name - [$lang]';
-      }
-      return name;
-    }
-    if (lang != null) return lang;
-    return fallback;
-  }
+  }) =>
+      subtitleDisplayName(
+        title: title,
+        language: language,
+        fallback: fallback,
+      );
 
   /// The channel count for an audio track: the demux channel count, else
   /// the output channel count, else the channel layout string (`5.1` → 6)
@@ -787,54 +981,42 @@ class MpvVlcController implements VlcPlayerController {
 
   @override
   Future<List<VlcTrackDescription>> getSubtitleTracks() async {
-    final embedded = _embeddedSubtitles;
-    final external = _externalSubtitlesDeduped;
+    // One row per logical subtitle: the merged snapshot, so an [auto]
+    // rendition never lists beside its own (source) file and the list
+    // cannot grow as the HLS master settles.
     return <VlcTrackDescription>[
-      for (var i = 0; i < embedded.length; i++)
+      for (final row in _subtitleRows)
         VlcTrackDescription(
-          // The track's real mpv sid — never the list position (see
-          // [_trackId]): the drawer shows this id, and the tap sets it.
-          id: _trackId(embedded[i].id, i),
-          name: _trackDisplayName(
-            title: embedded[i].title,
-            language: embedded[i].language,
-            // A track with no title and no language reads as plain
-            // "Subtitle" — never "Subtitle 1" / "Subtitle 2".
-            fallback: 'Subtitle',
-          ),
-          language: embedded[i].language,
-        ),
-      for (var i = 0; i < external.length; i++)
-        VlcTrackDescription(
-          id: _externalIdBase + i,
-          name: '${external[i].label} (source)',
-          language: external[i].lang,
+          id: row.id,
+          name: row.name,
+          language: row.language,
         ),
     ];
   }
 
   @override
   Future<void> setSubtitleTrack(int id) async {
-    if (id >= _externalIdBase) {
-      final external = _externalSubtitlesDeduped;
-      final index = id - _externalIdBase;
-      if (index < 0 || index >= external.length) return;
-      final file = external[index];
+    // By row id, not by list position: the position of a track in the
+    // list moves while an HLS master settles, the id does not. A merged
+    // row plays its side-car file; an embedded-only row plays its mpv
+    // track.
+    SubtitleRow? row;
+    for (final candidate in _subtitleRows) {
+      if (candidate.id == id) {
+        row = candidate;
+        break;
+      }
+    }
+    if (row == null) return;
+    final file = row.external;
+    if (file != null) {
       await _player.setSubtitleTrack(
         SubtitleTrack.uri(file.url, title: file.label),
       );
       publish();
       return;
     }
-    // By mpv sid, not by list position (see [setAudioTrack]).
-    final embedded = _embeddedSubtitles;
-    SubtitleTrack? track;
-    for (var i = 0; i < embedded.length; i++) {
-      if (_trackId(embedded[i].id, i) == id) {
-        track = embedded[i];
-        break;
-      }
-    }
+    final track = row.embedded;
     if (track == null) return;
     await _player.setSubtitleTrack(track);
     publish();
