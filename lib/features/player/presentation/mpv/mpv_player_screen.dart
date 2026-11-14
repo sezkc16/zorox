@@ -34,9 +34,13 @@
 ///     of the first working source.
 ///
 /// What it deliberately does NOT carry (mpv limits, reported honestly):
-///   * PiP — no PiP button; mpv renders through a Metal texture, not an
-///     AVPlayerLayer (see the v18 header). Audio keeps playing in the
-///     background (the app declares the `audio` background mode).
+///   * PiP on iOS — mpv renders through a Metal texture, not an
+///     AVPlayerLayer (see the v18 header), so there is no iOS PiP window.
+///     Android PiP exists: the activity enters it through
+///     [PlayerPlatformService] — a button in the top bar, plus auto-enter
+///     when the viewer leaves the app mid-play — and the chrome unmounts
+///     while the window is open. Audio keeps playing in the background
+///     (the app declares the `audio` background mode).
 ///   * Cast — no cast button; media_kit has no cast in this app.
 ///   * Subtitle/audio delay — media_kit 1.2.6 exposes no delay API, so
 ///     there is no delay control (the stock panel's steppers were no-ops
@@ -58,6 +62,7 @@ import 'package:vlc_player/vlc_player.dart';
 
 import '../../../../core/domain/entity/multimedia_item.dart';
 import '../../../../core/providers/device_info_provider.dart';
+import '../../../../core/services/notification_service.dart';
 import '../../../../core/storage/episode_watch_repository.dart';
 import '../../../../core/storage/history_repository.dart';
 import '../../../../core/storage/settings_repository.dart';
@@ -401,6 +406,23 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   bool _disposed = false;
   final List<StreamSubscription<dynamic>> _subs = [];
 
+  /// The platform bridge for Android picture-in-picture: the activity
+  /// enters PiP through it, and the PiP window's transport buttons and
+  /// mode changes come back through it (see [_attachPip]).
+  final PlayerPlatformService _platform = PlayerPlatformService();
+
+  /// True while the PiP window is open (or an enter request is out): the
+  /// golden chrome is unmounted, so the video is bare under the window.
+  bool _inPip = false;
+
+  /// The PiP watchdog: if the window never opens after a successful
+  /// request, the chrome comes back after 5 s instead of staying hidden
+  /// forever (mirrors the VLC screen).
+  Timer? _pipWatchdog;
+  int _pipAttempt = 0;
+  bool _pipWindowOpened = false;
+  bool _pipAttemptFromButton = false;
+
   bool get _isSeries =>
       widget.item.contentType == MultimediaContentType.series ||
       widget.item.contentType == MultimediaContentType.anime;
@@ -408,6 +430,19 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   bool get _isEpisodic => _isSeries && _currentEpisode != null;
 
   bool get _canSeek => _duration > Duration.zero && !_isLive;
+
+  /// Picture-in-picture is an Android activity mode; mpv on iOS renders
+  /// through a Metal texture with no AVPlayerLayer, so there is no PiP
+  /// there. Meaningless on a television either way.
+  ///
+  /// The gate reads [defaultTargetPlatform] rather than `Platform.isAndroid`
+  /// because only the former can be overridden by a test (see
+  /// [PlayerPlatformService.enterPip]); in production the two agree.
+  bool get _pipAvailable {
+    if (defaultTargetPlatform != TargetPlatform.android) return false;
+    final profile = ref.read(deviceProfileProvider).asData?.value;
+    return playerFormFactorOf(profile) != PlayerFormFactor.tv;
+  }
 
   /// Whether an episode follows this one. Recomputed rather than cached so
   /// it cannot go stale after an advance.
@@ -449,6 +484,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     // The chrome showing/hiding moves the caption's bottom padding, so
     // the padding is pushed into the video view on every change.
     _chrome.addListener(_onChromeVisibilityChanged);
+    // PiP transport buttons + mode changes ride back through the platform
+    // channel; attach early so a window opened before the first play is
+    // still routed.
+    _attachPip();
     _init();
   }
 
@@ -459,6 +498,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _watchdogTimer?.cancel();
     _prebufferTimer?.cancel();
     _stallTimer?.cancel();
+    _pipWatchdog?.cancel();
+    // The channel handler closes over this screen; without the detach it
+    // would keep routing PiP buttons into a disposed player.
+    _platform.detachPipListener();
     for (final sub in _subs) {
       unawaited(sub.cancel());
     }
@@ -498,6 +541,30 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_disposed || !mounted) return;
+    if (state == AppLifecycleState.inactive) {
+      // Home swipe / app switcher on Android: the moment to enter PiP.
+      // `inactive` is the activity pausing while still visible, so the
+      // enter call is still valid here — and the window opening keeps
+      // the app from ever reaching `paused`, so media_kit's
+      // pauseUponEnteringBackgroundMode never fires and the film keeps
+      // playing under the window. Only while actually playing, and only
+      // where PiP exists; a paused film stays paused.
+      if (!_inPip && _pipAvailable && _playing) {
+        unawaited(_enterPip());
+      }
+    }
+    if (state == AppLifecycleState.resumed) {
+      // Backstop behind `pipModeChanged`: returning to the foreground is
+      // what ending PiP looks like, and the chrome must come back with it
+      // whether or not the activity got round to telling us. The window
+      // is already gone by the time the app is foregrounded, so there is
+      // no native stop to send — just take the chrome back.
+      if (_inPip) {
+        _pipWatchdog?.cancel();
+        _pipWatchdog = null;
+        setState(() => _inPip = false);
+      }
+    }
     // A backstop behind the pause flush: the position at the moment the
     // app goes away is the one Continue Watching must have.
     if (state == AppLifecycleState.paused ||
@@ -545,6 +612,136 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     final recorder = _recorder;
     if (sample == null || recorder == null) return;
     recorder.record(sample, lastStreamUrl: _selected?.url, force: true);
+  }
+
+  /// Routes the PiP window's transport buttons and mode changes back to
+  /// the screen (Android only; the channel is inert elsewhere).
+  ///
+  /// The handler is keyed by channel name, so it is process-wide — a
+  /// second call replaces the first. Detached in [dispose].
+  void _attachPip() {
+    _platform.attachPipListener(
+      onAction: (action) => switch (action) {
+        PipAction.play => unawaited(_player.play()),
+        PipAction.pause => unawaited(_player.pause()),
+        PipAction.seekForward => _seekRelative(
+          PlayerPlatformService.pipSeekStep,
+        ),
+        PipAction.seekBackward => _seekRelative(
+          -PlayerPlatformService.pipSeekStep,
+        ),
+      },
+      onModeChanged: (inPip) {
+        if (!mounted || _disposed || inPip == _inPip) return;
+        // The attempt's answer, whatever it is: the watchdog stands down.
+        _pipWatchdog?.cancel();
+        _pipWatchdog = null;
+        // The other way into PiP: the viewer swiped home and the
+        // auto-enter below never ran, or the system's own PiP control
+        // opened it. A locked PiP window has no chip in it, so the lock
+        // clears on the way in.
+        if (inPip) {
+          _pipWindowOpened = true;
+          _pipAttemptFromButton = false;
+          _locked.value = false;
+        }
+        setState(() => _inPip = inPip);
+      },
+    );
+  }
+
+  /// Seeks by [delta] from wherever playback is, for the PiP buttons.
+  ///
+  /// Clamped at both ends: a negative target is refused outright by mpv,
+  /// and overshooting the duration would trip the end-of-media handler.
+  /// Counted from the last known position. No chain can straddle this:
+  /// [GoldenPlayerControls] is built only while `!_inPip`, so it is
+  /// unmounted before a PiP window exists to press these buttons in.
+  void _seekRelative(Duration delta) {
+    if (!_canSeek) return;
+    var target = _position + delta;
+    if (target < Duration.zero) target = Duration.zero;
+    if (_duration > Duration.zero && target > _duration) {
+      target = _duration;
+    }
+    unawaited(_player.seek(target));
+  }
+
+  /// Enters the Android PiP window.
+  ///
+  /// Mirrors the VLC screen: the chrome comes off optimistically in the
+  /// same frame the request is made, and the lock clears on the way in
+  /// (a locked PiP window has no chip in it). Android answers false —
+  /// not an error — when the user has PiP disabled for the app, and then
+  /// never sends `pipModeChanged`; without the reset below the optimism
+  /// is permanent and the chrome never comes back.
+  Future<void> _enterPip({bool fromButton = false}) async {
+    _pipAttemptFromButton = fromButton;
+    _pipWindowOpened = false;
+    setState(() => _inPip = true);
+    _locked.value = false;
+    final entered = await _platform.enterPip(
+      _playing,
+      // Shapes the window to the film. Read at the moment of the request
+      // rather than remembered, because a failover or a next-episode start
+      // can have changed it since the last size event.
+      videoSize: _adapter.value.videoSize,
+    );
+    if (_disposed || !mounted || !_inPip) return;
+    if (!entered) {
+      if (fromButton) {
+        // The native side refused outright (no PiP support, no picture):
+        // say so, instead of the button silently doing nothing.
+        ref
+            .read(notificationServiceProvider)
+            .showInfo(
+              'Picture-in-picture isn\'t available for this video right now.',
+              title: 'Picture-in-picture',
+            );
+      }
+      setState(() => _inPip = false);
+      return;
+    }
+    // The request went out; the window opening, or failing to, is
+    // reported through `pipModeChanged`. If neither arrives, the watchdog
+    // takes the chrome back (see [_armPipWatchdog]).
+    _armPipWatchdog();
+  }
+
+  /// Arms the PiP watchdog for the attempt that just went out.
+  ///
+  /// The native start only says the request went out; the window opening,
+  /// or failing to, is reported through `pipModeChanged`. If neither
+  /// arrives, the player is left with its controls unmounted and no touch
+  /// handling at all — the screen looks frozen until the app is
+  /// backgrounded and foregrounded again. Five seconds is the backstop
+  /// behind the native side's own three: the native gate gives up at
+  /// three seconds and reports the failure itself, so this only fires
+  /// when no event arrived at all.
+  void _armPipWatchdog() {
+    _pipWatchdog?.cancel();
+    final attempt = ++_pipAttempt;
+    _pipWatchdog = Timer(const Duration(seconds: 5), () {
+      if (_disposed || !mounted || attempt != _pipAttempt) return;
+      // The window opened after all, or the event is already on its way.
+      if (_pipWindowOpened || !_inPip) return;
+      if (kDebugMode) {
+        debugPrint(
+          'MpvPlayerScreen: PiP watchdog fired — the window never opened',
+        );
+      }
+      final fromButton = _pipAttemptFromButton;
+      _pipAttemptFromButton = false;
+      if (fromButton) {
+        ref
+            .read(notificationServiceProvider)
+            .showInfo(
+              'Picture-in-picture didn\'t open for this video.',
+              title: 'Picture-in-picture',
+            );
+      }
+      if (mounted && !_disposed) setState(() => _inPip = false);
+    });
   }
 
   Future<void> _init() async {
@@ -638,6 +835,14 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       _player.stream.playing.listen((playing) {
         if (_disposed) return;
         _playing = playing;
+        // Keeps the PiP window's play/pause button in sync while the
+        // window is open. Not worth the platform call while it is not.
+        if (_inPip) {
+          _platform.syncPipState(
+            playing,
+            videoSize: _adapter.value.videoSize,
+          );
+        }
         if (playing) {
           final firstPlay = !_startedPlaying;
           _startedPlaying = true;
@@ -1763,7 +1968,10 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
           // card is up, so their autofocus and Back handling own the route.
           if (_stage == _Stage.playing &&
               _ended == null &&
-              _nextEpisodeOffer == null)
+              _nextEpisodeOffer == null &&
+              // The window is the chrome in PiP: the golden controls
+              // unmount while it is open (mirrors the VLC screen).
+              !_inPip)
             RepaintBoundary(
               child: GoldenPlayerControls(
                 controller: _adapter,
@@ -1822,6 +2030,11 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
                 // have no padlock.
                 locked: form.isTouch ? _locked : null,
                 lockAvailable: form.isTouch,
+                // PiP is Android-only; on iOS and TV this stays null and
+                // the button never renders.
+                onEnterPip: _pipAvailable
+                    ? () => unawaited(_enterPip(fromButton: true))
+                    : null,
               ),
             ),
 

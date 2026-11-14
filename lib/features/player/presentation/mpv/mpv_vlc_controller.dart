@@ -18,8 +18,12 @@
 ///   * position/duration/buffered/video size — published from mpv's state.
 ///
 /// What mpv cannot do, and is honestly absent rather than faked:
-///   * picture-in-picture — `startPictureInPicture` returns false, and the
-///     screen passes no `onEnterPip`, so no PiP button is rendered;
+///   * picture-in-picture — `startPictureInPicture` returns false (no
+///     iOS PiP window from an mpv texture). Android PiP does not go
+///     through here at all: the screen enters it through the platform
+///     service and passes `onEnterPip`, so the PiP button renders on
+///     Android; the only job here is publishing `videoSize` for the
+///     window's aspect ratio;
 ///   * audio/subtitle delay — media_kit 1.2.6 exposes no delay API, so
 ///     [setAudioDelay] / [setSubtitleDelay] are no-ops (the panel's stepper
 ///     shows 0 and does nothing);

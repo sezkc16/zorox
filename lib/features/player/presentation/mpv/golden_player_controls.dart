@@ -29,9 +29,11 @@
 ///
 /// Everything is wired to the real engine through the adapter: no
 /// placeholder buttons. No Cast button — mpv/media_kit has no cast in
-/// this app, and a dead one is worse than none. No PiP — mpv renders
-/// through a Metal texture. The drawers (Episodes, Subtitle Style,
-/// Audio, Sources) slide in from the right over the video.
+/// this app, and a dead one is worse than none. PiP is Android-only: the
+/// screen passes `onEnterPip` where PiP exists (button in the top bar),
+/// nothing on iOS — mpv renders through a Metal texture there. The
+/// drawers (Episodes, Subtitle Style, Audio, Sources) slide in from the
+/// right over the video.
 library;
 
 import 'dart:async';
@@ -97,6 +99,7 @@ class GoldenPlayerControls extends ConsumerStatefulWidget {
     this.onSkipOutro,
     this.locked,
     this.lockAvailable = true,
+    this.onEnterPip,
     super.key,
   });
 
@@ -163,6 +166,12 @@ class GoldenPlayerControls extends ConsumerStatefulWidget {
   /// [lockAvailable] is true (a touch form factor).
   final ValueNotifier<bool>? locked;
   final bool lockAvailable;
+
+  /// Enters picture-in-picture. Non-null on Android where PiP exists; the
+  /// button renders only when this is non-null and the `showPip` setting
+  /// is on — the same gate as the stock chrome. Null on iOS (mpv has no
+  /// PiP window there) and on TV.
+  final VoidCallback? onEnterPip;
 
   @override
   ConsumerState<GoldenPlayerControls> createState() =>
@@ -829,6 +838,14 @@ class _GoldenPlayerControlsState
                           onPickSpeed: _pickSpeed,
                           onCycleFit: _cycleFit,
                           onRotate: widget.onRotate,
+                          // Same gate as the stock chrome: the button
+                          // renders only when the screen offers PiP and
+                          // the `showPip` setting is on.
+                          onEnterPip:
+                              widget.onEnterPip != null &&
+                                  widget.settings.value.showPip
+                              ? widget.onEnterPip
+                              : null,
                         ),
                       ),
                     ),
@@ -1218,6 +1235,7 @@ class _TopBar extends StatelessWidget {
     required this.onPickSpeed,
     required this.onCycleFit,
     required this.onRotate,
+    required this.onEnterPip,
   });
 
   final String title;
@@ -1233,6 +1251,10 @@ class _TopBar extends StatelessWidget {
   final VoidCallback onPickSpeed;
   final VoidCallback onCycleFit;
   final VoidCallback? onRotate;
+
+  /// Non-null when the screen offers PiP (Android) and the `showPip`
+  /// setting is on; the button is absent otherwise.
+  final VoidCallback? onEnterPip;
 
   @override
   Widget build(BuildContext context) {
@@ -1314,6 +1336,15 @@ class _TopBar extends StatelessWidget {
             tooltip: 'Episodes',
           ),
         if (isSeries) const SizedBox(width: 8),
+        // Picture-in-picture (Android only, `showPip` on): the same
+        // icon and gate as the stock chrome.
+        if (onEnterPip != null)
+          GoldenIconButton(
+            icon: Icons.picture_in_picture_alt_rounded,
+            onPressed: onEnterPip,
+            tooltip: 'Picture-in-picture',
+          ),
+        if (onEnterPip != null) const SizedBox(width: 8),
         _MoreMenu(
           onOpenAudioSources: onOpenAudioSources,
           onOpenSources: onOpenSources,
