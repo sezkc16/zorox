@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:reicons/reicons.dart';
@@ -109,5 +110,56 @@ void main() {
     expect(find.text('Home'), findsOneWidget);
     expect(find.text('Plugins'), findsOneWidget);
     expect(find.byIcon(ReiconFilledIcons.grid), findsOneWidget);
+  });
+
+  testWidgets('iOS pill drops to the Android spot; Android does not move',
+      (tester) async {
+    // The override must be cleared before the test body returns: the
+    // framework verifies all foundation debug vars are unset after the
+    // body, before addTearDown callbacks run.
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      // iPhone 15 Pro Max: 34pt home-indicator inset -> 18pt extra shift,
+      // landing the pill 16pt from the bottom edge, as on Android.
+      double shift = -1;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(
+              viewPadding: EdgeInsets.only(bottom: 34),
+            ),
+            child: Builder(
+              builder: (context) {
+                shift = CustomBottomNavBar.extraLowerBy(context);
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+        ),
+      );
+      expect(shift, 18.0);
+
+      // Android (gesture nav, ~16pt inset): no shift at all.
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      shift = -1;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MediaQuery(
+            data: const MediaQueryData(
+              viewPadding: EdgeInsets.only(bottom: 16),
+            ),
+            child: Builder(
+              builder: (context) {
+                shift = CustomBottomNavBar.extraLowerBy(context);
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+        ),
+      );
+      expect(shift, 0.0);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 }

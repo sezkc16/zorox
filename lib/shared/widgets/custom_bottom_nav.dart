@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:liquid_glass_bottom_nav/liquid_glass_bottom_nav.dart';
 import 'package:reicons/reicons.dart';
@@ -56,8 +57,27 @@ class CustomBottomNavBar extends StatelessWidget {
   /// margins, so lowering `insets` further would shrink the pill itself;
   /// the shell shifts it down by this much instead, keeping the pill's
   /// look (glass, gold active, icons, labels) unchanged. 8 sits the pill
-  /// right above the home-indicator zone.
+  /// right above the home-indicator zone — before [extraLowerBy].
   static const double lowerBy = 8.0;
+
+  /// The bottom gap the pill keeps from the physical screen edge on
+  /// Android (gesture nav): the package already places the pill that
+  /// far up, so on Android the pill hugs the bottom edge as the user
+  /// wants. On iOS the safe area is ~34pt (home indicator), so the
+  /// same rule floats the pill 34pt up instead.
+  static const double _kTargetBottomGap = 16.0;
+
+  /// Extra downward shift the shell adds on iOS only, so the pill
+  /// lands at the same [_kTargetBottomGap] from the bottom edge as on
+  /// Android (iPhone 15 Pro Max: 34 − 16 = 18). Android returns 0 —
+  /// its position does not move at all. The content reserve
+  /// ([bottomInsetFor]) is unchanged, so the last content row still
+  /// clears the bar with room to spare.
+  static double extraLowerBy(BuildContext context) {
+    if (defaultTargetPlatform != TargetPlatform.iOS) return 0.0;
+    final bottom = MediaQuery.viewPaddingOf(context).bottom;
+    return math.max(bottom - _kTargetBottomGap, 0.0);
+  }
 
   /// Vertical space the floating nav occupies above the system bottom
   /// inset — the shell reserves this so content clears the bar. The

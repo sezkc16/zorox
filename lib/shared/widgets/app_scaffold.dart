@@ -449,10 +449,16 @@ class _AppScaffoldState extends ConsumerState<AppScaffold>
                   ),
                   child: _branchTransition(),
                 ),
-                // Lower than the package position (see [CustomBottomNavBar.lowerBy]):
-                // the pill hugs the bottom edge instead of floating mid-row.
+                // Lower than the package position (see [CustomBottomNavBar.lowerBy]
+                // and [CustomBottomNavBar.extraLowerBy]): the pill hugs the
+                // bottom edge instead of floating mid-row — on iOS the extra
+                // shift drops it to the same spot as on Android.
                 Transform.translate(
-                  offset: const Offset(0, CustomBottomNavBar.lowerBy),
+                  offset: Offset(
+                    0,
+                    CustomBottomNavBar.lowerBy +
+                        CustomBottomNavBar.extraLowerBy(context),
+                  ),
                   child: CustomBottomNavBar(
                     currentIndex: widget.navigationShell.currentIndex,
                     onTap: (index) => _onItemTapped(index, context),
