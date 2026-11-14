@@ -136,15 +136,22 @@ void main() {
     expect(storage.getAccentColor(), 'purple');
   });
 
-  test('the palette has 8 distinct, named presets', () {
-    expect(ZoroxAccent.values.length, 8);
+  test('the palette has 10 distinct, named presets', () {
+    expect(ZoroxAccent.values.length, 10);
     expect(
       ZoroxAccent.values.map((a) => a.color).toSet().length,
-      8,
+      10,
       reason: 'no two presets share a color',
     );
     for (final accent in ZoroxAccent.values) {
       expect(accent.label, isNotEmpty);
     }
+  });
+
+  test('White and Black are in the palette (M M, 2026-11-14)', () {
+    expect(ZoroxAccent.white.color, const Color(0xFFFFFFFF));
+    expect(ZoroxAccent.black.color, const Color(0xFF000000));
+    expect(ZoroxAccent.fromName('white'), ZoroxAccent.white);
+    expect(ZoroxAccent.fromName('black'), ZoroxAccent.black);
   });
 }

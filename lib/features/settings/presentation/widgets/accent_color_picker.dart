@@ -85,11 +85,17 @@ class _Swatch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A dark check on the light accents (Gold, Orange, Green, Cyan),
-    // a white check on the dark ones (Red, Blue, Purple, Pink).
+    // A dark check on the light accents (Gold, Orange, Green, Cyan, White),
+    // a white check on the dark ones (Red, Blue, Purple, Pink, Black).
     final checkColor = option.color.computeLuminance() > 0.5
         ? Colors.black
         : Colors.white;
+    // The Black swatch is invisible on the dark Settings background with
+    // a black-tinted border, so it gets a light ring instead (M M
+    // 2026-11-14: Black accent for the light theme).
+    final unselectedBorder = option.color.computeLuminance() < 0.05
+        ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4)
+        : option.color.withValues(alpha: 0.4);
     return Semantics(
       button: true,
       selected: selected,
@@ -109,7 +115,7 @@ class _Swatch extends StatelessWidget {
               border: Border.all(
                 color: selected
                     ? Theme.of(context).colorScheme.onSurface
-                    : option.color.withValues(alpha: 0.4),
+                    : unselectedBorder,
                 width: selected ? 2.5 : 1.5,
               ),
               boxShadow: selected

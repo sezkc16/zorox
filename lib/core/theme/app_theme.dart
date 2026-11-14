@@ -372,18 +372,25 @@ class AppTheme {
     // The accent drives the light theme's primary too, so the picker works
     // in both themes. Containers are a light tint of the accent; their "on"
     // colour is the accent darkened, so text stays readable on them.
+    //
+    // A near-white accent (White, M M 2026-11-14) would make `onPrimary`
+    // white-on-white — invisible. Very light accents get dark `onPrimary`
+    // text instead, so a white button still reads.
     if (accent != null) {
       final hsl = HSLColor.fromColor(accent);
       final darkAccent = hsl
           .withLightness((hsl.lightness - 0.35).clamp(0.0, 1.0))
           .toColor();
+      final onPrimary = accent.computeLuminance() > 0.6
+          ? const Color(0xFF1A1A1A)
+          : Colors.white;
       colorScheme = colorScheme.copyWith(
         primary: accent,
-        onPrimary: Colors.white,
+        onPrimary: onPrimary,
         primaryContainer: accent.withValues(alpha: 0.18),
         onPrimaryContainer: darkAccent,
         tertiary: accent,
-        onTertiary: Colors.white,
+        onTertiary: onPrimary,
         tertiaryContainer: accent.withValues(alpha: 0.18),
         onTertiaryContainer: darkAccent,
       );
