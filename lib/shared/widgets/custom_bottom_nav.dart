@@ -52,19 +52,42 @@ class CustomBottomNavBar extends StatelessWidget {
   /// no separate bottom offset.
   static const double _kBottomMargin = 8.0;
 
-  /// Vertical space the floating nav occupies above the system bottom
-  /// inset — the shell reserves this so content clears the bar. The
-  /// package's [LiquidGlassNavBar.contentBottomInset] (96) is pill 68 +
-  /// bottom margin 16 + 12 breathing buffer; with the margin at
-  /// [_kBottomMargin] the reserve shrinks by the same amount, so the last
-  /// content row stays fully visible above the pill (no content hidden
-  /// behind it).
-  static const double height =
-      LiquidGlassNavBar.contentBottomInset - 16.0 + _kBottomMargin;
+  /// The pill's height (package: fixed 68).
+  static const double _kPillHeight = 68.0;
 
-  /// The pill's offset from the screen bottom (matching 4c-app convention).
-  static double bottomInsetFor(BuildContext context) =>
-      math.max(MediaQuery.viewPaddingOf(context).bottom - 8, 12);
+  /// How far the pill's bottom edge sits above the physical screen bottom
+  /// — the Android spot the user asked for (blue mark, 2026-11-14).
+  /// 8pt reads as hugging the bottom edge on both platforms.
+  static const double targetBottomGap = 8.0;
+
+  /// Breathing room between the pill top and the last content row.
+  static const double _kContentBuffer = 12.0;
+
+  /// Total bottom clearance content needs from the physical screen bottom:
+  /// pill top (target gap + pill height) + breathing buffer. The shell
+  /// reserves this (minus the real safe-area padding, which is already in
+  /// the content's MediaQuery) so the last row clears the pill.
+  static const double contentClearance =
+      targetBottomGap + _kPillHeight + _kContentBuffer;
+
+  /// The `padding.bottom` the package should see so the pill lands at
+  /// [targetBottomGap] above the physical screen bottom. The package
+  /// positions the pill at `MediaQuery.padding.bottom + insets`, so on iOS
+  /// (real safe-area padding ~34) the pill floats mid-screen unless a
+  /// smaller padding is fed in; on Android the real padding is already ~0
+  /// so this is a no-op. Only ever lowers, never raises.
+  ///
+  /// Implemented as a [MediaQuery] override (see [AppScaffold]) — an
+  /// [InheritedWidget], not a [RenderObjectWidget] — so the package's root
+  /// [Positioned] still talks directly to the shell's [Stack]. A
+  /// [Transform] or [Padding] wrapper here would put a render object
+  /// between them and throw "Incorrect use of ParentDataWidget" on every
+  /// frame — that is exactly what froze the app in +15..+19.
+  static double navPaddingBottom(BuildContext context) {
+    final real = MediaQuery.paddingOf(context).bottom;
+    const needed = targetBottomGap - _kBottomMargin;
+    return math.min(real, math.max(0.0, needed));
+  }
 
   @override
   Widget build(BuildContext context) {

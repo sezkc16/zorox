@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -417,9 +418,15 @@ class _AppScaffoldState extends ConsumerState<AppScaffold>
         }
 
         // Mobile uses Bottom Navigation
-        final bottomInset = CustomBottomNavBar.bottomInsetFor(context);
-        final navBarTotalHeight = CustomBottomNavBar.height + bottomInset;
         final mq = MediaQuery.of(context);
+        // Content must clear the pill top (see
+        // [CustomBottomNavBar.contentClearance]); the real safe-area
+        // padding is already in mq.padding.bottom, so only the remainder
+        // is added.
+        final navBarTotalHeight = math.max(
+          CustomBottomNavBar.contentClearance - mq.padding.bottom,
+          0.0,
+        );
 
         return PopScope(
           canPop: false,
@@ -452,9 +459,28 @@ class _AppScaffoldState extends ConsumerState<AppScaffold>
                   ),
                   child: _branchTransition(),
                 ),
-                CustomBottomNavBar(
-                  currentIndex: widget.navigationShell.currentIndex,
-                  onTap: (index) => _onItemTapped(index, context),
+                // v20+21: the package positions the pill at
+                // MediaQuery.padding.bottom + insets, so on iOS the real
+                // safe-area padding (~34) floats it mid-screen. Feeding it
+                // a smaller padding (see
+                // [CustomBottomNavBar.navPaddingBottom]) drops the pill to
+                // the bottom edge — the Android spot. MediaQuery is an
+                // InheritedWidget, not a render object, so the package's
+                // root Positioned still talks directly to this Stack.
+                // NEVER wrap the nav in a Transform/Padding/Align here:
+                // a render object between the Stack and the Positioned
+                // throws "Incorrect use of ParentDataWidget" on every
+                // frame and freezes the app — that was +15..+19.
+                MediaQuery(
+                  data: mq.copyWith(
+                    padding: mq.padding.copyWith(
+                      bottom: CustomBottomNavBar.navPaddingBottom(context),
+                    ),
+                  ),
+                  child: CustomBottomNavBar(
+                    currentIndex: widget.navigationShell.currentIndex,
+                    onTap: (index) => _onItemTapped(index, context),
+                  ),
                 ),
               ],
             ),

@@ -110,4 +110,101 @@ void main() {
     expect(find.text('Plugins'), findsOneWidget);
     expect(find.byIcon(ReiconFilledIcons.grid), findsOneWidget);
   });
+
+  // v20+21: the pill must sit at the bottom edge on iOS. The package
+  // positions its root Positioned at
+  // MediaQuery.padding.bottom + insets, so with the shell's MediaQuery
+  // override the pill's bottom must equal targetBottomGap even when the
+  // real safe-area padding is 34 (iPhone home indicator).
+  testWidgets('pill lands at the bottom edge on an iPhone-like safe area',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(brightness: Brightness.dark),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: Size(390, 844),
+            padding: EdgeInsets.only(bottom: 34),
+          ),
+          child: Scaffold(
+            body: Stack(
+              children: [
+                const SizedBox.expand(),
+                Builder(
+                  builder: (context) {
+                    final mq = MediaQuery.of(context);
+                    return MediaQuery(
+                      data: mq.copyWith(
+                        padding: mq.padding.copyWith(
+                          bottom: CustomBottomNavBar.navPaddingBottom(
+                            context,
+                          ),
+                        ),
+                      ),
+                      child: CustomBottomNavBar(
+                        currentIndex: 0,
+                        onTap: (_) {},
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // The package's root Positioned: left/right are the side margins
+    // (insets = 8) and bottom is the pill's gap from the screen edge.
+    final positioned = tester
+        .widgetList<Positioned>(find.byType(Positioned))
+        .where((p) => p.left == 8.0 && p.right == 8.0)
+        .toList();
+    expect(positioned, hasLength(1));
+    expect(positioned.single.bottom, CustomBottomNavBar.targetBottomGap);
+  });
+
+  testWidgets('navPaddingBottom only ever lowers the pill', (tester) async {
+    double? seen34;
+    double? seen0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Column(
+          children: [
+            MediaQuery(
+              data: const MediaQueryData(
+                padding: EdgeInsets.only(bottom: 34),
+              ),
+              child: Builder(
+                builder: (context) {
+                  seen34 = CustomBottomNavBar.navPaddingBottom(context);
+                  return const SizedBox.shrink();
+                },
+              ),
+            ),
+            MediaQuery(
+              data: const MediaQueryData(padding: EdgeInsets.zero),
+              child: Builder(
+                builder: (context) {
+                  seen0 = CustomBottomNavBar.navPaddingBottom(context);
+                  return const SizedBox.shrink();
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    expect(seen34, 0.0);
+    expect(seen0, 0.0);
+  });
+
+  test('content clearance covers the pill top plus buffer', () {
+    expect(CustomBottomNavBar.targetBottomGap, 8.0);
+    // 8 (gap) + 68 (pill) + 12 (buffer).
+    expect(CustomBottomNavBar.contentClearance, 88.0);
+  });
 }
