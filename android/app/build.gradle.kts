@@ -152,18 +152,29 @@ android {
     //     source is the Flutter intermediate dir with include
     //     "flutter_assets/**", so the exclude pattern is relative to
     //     that dir (verified against FlutterTaskHelper.getAssets).
+    //     NOTE (v20+9 fix): `tasks.named("copyFlutterAssetsRelease")`
+    //     THROWS at configuration time — the Flutter plugin registers
+    //     that task only when AGP creates the release variant, which
+    //     happens AFTER this build script is evaluated. `configureEach`
+    //     is lazy and applies when the task is created, so it can never
+    //     throw for a not-yet-registered task.
     // (2) Safety net: after mergeReleaseAssets, delete the folder from
     //     the merged assets output if it is there anyway. Uses only
     //     standard Gradle APIs (layout.buildDirectory); deleteRecursively
     //     on a missing path is a no-op, so this cannot break the build.
-    tasks.named<Copy>("copyFlutterAssetsRelease") {
-        exclude("flutter_assets/packages/flutter_torrent_server/assets/torrserver/**")
+    //     Same lazy lookup for the same reason.
+    tasks.withType<Copy>().configureEach {
+        if (name == "copyFlutterAssetsRelease") {
+            exclude("flutter_assets/packages/flutter_torrent_server/assets/torrserver/**")
+        }
     }
-    tasks.named("mergeReleaseAssets") {
-        doLast {
-            layout.buildDirectory
-                .dir("intermediates/merged_assets/release/mergeReleaseAssets/out/flutter_assets/packages/flutter_torrent_server/assets/torrserver")
-                .get().asFile.deleteRecursively()
+    tasks.configureEach {
+        if (name == "mergeReleaseAssets") {
+            doLast {
+                layout.buildDirectory
+                    .dir("intermediates/merged_assets/release/mergeReleaseAssets/out/flutter_assets/packages/flutter_torrent_server/assets/torrserver")
+                    .get().asFile.deleteRecursively()
+            }
         }
     }
 }
