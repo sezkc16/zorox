@@ -71,18 +71,42 @@ const double kMpvRaiseNudgeLarge = 0.1;
 const double kMpvSubtitlePaddingHidden = 40;
 const double kMpvSubtitlePaddingControls = 116;
 
+/// The PiP window's subtitle scale: Android PiP is a tiny window (about a
+/// third of the screen's width on a phone), and the caption is a Flutter
+/// overlay whose font size is fixed logical pixels — the video texture
+/// scales down with the window but the text does not, so a 22pt caption
+/// overflows the window and is cut off at the right edge (user screenshot,
+/// 2026-11-14, Flip 5). Halving the size keeps two-line dialogue inside
+/// the window with room to read; the Text wraps, so nothing is ever cut
+/// off. The same factor halves the side/bottom padding, which is also
+/// sized for a full screen: 40px of bottom padding is a third of a ~140px
+/// PiP window. Applies to Android PiP only — fullscreen playback is
+/// untouched.
+const double kMpvSubtitlePipFontScale = 0.5;
+const double kMpvSubtitlePipPaddingSide = 8;
+const double kMpvSubtitlePipPaddingBottom = 8;
+
 /// The text style the on-video caption (and the Style tab's preview line)
 /// are drawn in, from the saved settings.
-TextStyle mpvSubtitleTextStyle(PlayerSettings settings) {
+///
+/// [isPip] halves the font size for the Android PiP window (see
+/// [kMpvSubtitlePipFontScale]): the caption must fit a window a third the
+/// screen's width, and the overlay does not scale with it.
+TextStyle mpvSubtitleTextStyle(PlayerSettings settings, {bool isPip = false}) {
   final background = Color(
     settings.subtitleBackgroundColor,
   ).withValues(alpha: settings.subtitleBackgroundOpacity.clamp(0.0, 1.0));
   final text = Color(
     settings.subtitleColor,
   ).withValues(alpha: settings.subtitleTextOpacity.clamp(0.0, 1.0));
+  // Scale first, then clamp to a PiP floor of 6: the stock clamp's 10pt
+  // floor would undo the halving for the S/M steps.
+  final fontSize = (settings.subtitleSize.clamp(10.0, 80.0) *
+          (isPip ? kMpvSubtitlePipFontScale : 1.0))
+      .clamp(6.0, 80.0);
   return TextStyle(
     height: 1.4,
-    fontSize: settings.subtitleSize.clamp(10.0, 80.0),
+    fontSize: fontSize,
     // The Font setting (Default / Netflix / Serif / Monospace): the stock
     // VLC path applies it at creation, and mpv must too — otherwise the
     // setting silently does nothing on the mpv caption.
@@ -136,12 +160,32 @@ List<Shadow>? _mpvSubtitleShadows(PlayerSettings settings) {
 /// [screenHeight] is the landscape screen height, the frame the raise is a
 /// share of. The lift is added on top of the base padding, so the caption
 /// never drops under the controls bar.
+///
+/// [isPip] is the Android PiP window: the font is halved and the padding
+/// shrunk to PiP proportions (see [kMpvSubtitlePipFontScale]) — the
+/// overlay is fixed logical pixels and does not scale with the window.
+/// The raise still applies, but it is a share of the PiP window's own
+/// (small) height, so it shrinks with it.
 SubtitleViewConfiguration mpvSubtitleViewConfiguration(
   PlayerSettings settings, {
   required double screenHeight,
   required bool controlsVisible,
+  bool isPip = false,
 }) {
   final liftPx = settings.subtitleRaise.clamp(0.0, 0.5) * screenHeight;
+  if (isPip) {
+    return SubtitleViewConfiguration(
+      style: mpvSubtitleTextStyle(settings, isPip: true),
+      textAlign: TextAlign.center,
+      textScaler: const TextScaler.linear(1.0),
+      padding: EdgeInsets.fromLTRB(
+        kMpvSubtitlePipPaddingSide,
+        0,
+        kMpvSubtitlePipPaddingSide,
+        kMpvSubtitlePipPaddingBottom + liftPx,
+      ),
+    );
+  }
   final base = controlsVisible
       ? kMpvSubtitlePaddingControls
       : kMpvSubtitlePaddingHidden;

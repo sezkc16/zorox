@@ -1832,6 +1832,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
         settings,
         screenHeight: _lastScreenHeight,
         controlsVisible: _chrome.value,
+        // The PiP window is a third of the screen: the caption is halved
+        // and its padding shrunk, or it overflows the window (v20+24).
+        // The style reaches the view on the next rebuild (it reads the
+        // configuration's style fresh each build); the padding is pushed
+        // here because the view caches it (see the doc above).
+        isPip: _inPip,
       ).padding;
       if (padding == _lastSubtitlePadding) return;
       _lastSubtitlePadding = padding;
@@ -1862,6 +1868,9 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
       settings,
       screenHeight: screenHeight,
       controlsVisible: _chrome.value,
+      // PiP halves the caption (see the doc in mpv_subtitle_style.dart);
+      // _inPip flips by setState, so the rebuild carries it to the view.
+      isPip: _inPip,
     );
     if (_stage != _Stage.resolving &&
         subtitleConfig.padding != _lastSubtitlePadding) {
