@@ -64,15 +64,17 @@ class CustomBottomNavBar extends StatelessWidget {
   /// Android (gesture nav): the package already places the pill that
   /// far up, so on Android the pill hugs the bottom edge as the user
   /// wants. On iOS the safe area is ~34pt (home indicator), so the
-  /// same rule floats the pill 34pt up instead.
-  static const double _kTargetBottomGap = 16.0;
+  /// same rule floats the pill 34pt up instead — the user drew a blue
+  /// mark in the strip below the pill and asked for the bar there, so
+  /// on iOS the pill drops to this small gap from the edge instead of
+  /// the Android-matched 16pt: 8pt reads as hugging the bottom edge.
+  static const double _kTargetBottomGap = 8.0;
 
   /// Extra downward shift the shell adds on iOS only, so the pill
-  /// lands at the same [_kTargetBottomGap] from the bottom edge as on
-  /// Android (iPhone 15 Pro Max: 34 − 16 = 18). Android returns 0 —
-  /// its position does not move at all. The content reserve
-  /// ([bottomInsetFor]) is unchanged, so the last content row still
-  /// clears the bar with room to spare.
+  /// lands at [_kTargetBottomGap] from the bottom edge (iPhone 15 Pro
+  /// Max: 34 − 8 = 26). Android returns 0 — its position does not
+  /// move at all. The content reserve ([bottomInsetFor]) is unchanged,
+  /// so the last content row still clears the bar with room to spare.
   static double extraLowerBy(BuildContext context) {
     if (defaultTargetPlatform != TargetPlatform.iOS) return 0.0;
     final bottom = MediaQuery.viewPaddingOf(context).bottom;

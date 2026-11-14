@@ -112,15 +112,15 @@ void main() {
     expect(find.byIcon(ReiconFilledIcons.grid), findsOneWidget);
   });
 
-  testWidgets('iOS pill drops to the Android spot; Android does not move',
+  testWidgets('iOS pill drops to the bottom edge; Android does not move',
       (tester) async {
     // The override must be cleared before the test body returns: the
     // framework verifies all foundation debug vars are unset after the
     // body, before addTearDown callbacks run.
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     try {
-      // iPhone 15 Pro Max: 34pt home-indicator inset -> 18pt extra shift,
-      // landing the pill 16pt from the bottom edge, as on Android.
+      // iPhone 15 Pro Max: 34pt home-indicator inset -> 26pt extra shift,
+      // landing the pill 8pt from the bottom edge (the blue-mark spot).
       double shift = -1;
       await tester.pumpWidget(
         MaterialApp(
@@ -137,7 +137,7 @@ void main() {
           ),
         ),
       );
-      expect(shift, 18.0);
+      expect(shift, 26.0);
 
       // Android (gesture nav, ~16pt inset): no shift at all.
       debugDefaultTargetPlatformOverride = TargetPlatform.android;
