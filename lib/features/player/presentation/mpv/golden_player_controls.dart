@@ -1735,14 +1735,6 @@ class _BottomBar extends StatelessWidget {
               tooltip: 'Aspect ratio',
               size: 38,
             ),
-            const SizedBox(width: 6),
-            if (onRotate != null)
-              GoldenIconButton(
-                icon: Icons.fullscreen_rounded,
-                onPressed: onRotate,
-                tooltip: 'Rotate',
-                size: 38,
-              ),
           ],
         ),
       ],
