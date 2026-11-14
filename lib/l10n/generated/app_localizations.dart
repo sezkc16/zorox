@@ -1050,7 +1050,7 @@ abstract class AppLocalizations {
   /// No description provided for @internalPlayer.
   ///
   /// In en, this message translates to:
-  /// **'Internal (VLC)'**
+  /// **'Internal (mpv)'**
   String get internalPlayer;
 
   /// No description provided for @builtInPlayer.

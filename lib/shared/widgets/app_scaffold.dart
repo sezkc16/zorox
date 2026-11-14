@@ -449,9 +449,14 @@ class _AppScaffoldState extends ConsumerState<AppScaffold>
                   ),
                   child: _branchTransition(),
                 ),
-                CustomBottomNavBar(
-                  currentIndex: widget.navigationShell.currentIndex,
-                  onTap: (index) => _onItemTapped(index, context),
+                // Lower than the package position (see [CustomBottomNavBar.lowerBy]):
+                // the pill hugs the bottom edge instead of floating mid-row.
+                Transform.translate(
+                  offset: const Offset(0, CustomBottomNavBar.lowerBy),
+                  child: CustomBottomNavBar(
+                    currentIndex: widget.navigationShell.currentIndex,
+                    onTap: (index) => _onItemTapped(index, context),
+                  ),
                 ),
               ],
             ),

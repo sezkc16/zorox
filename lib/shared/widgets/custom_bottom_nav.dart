@@ -51,6 +51,14 @@ class CustomBottomNavBar extends StatelessWidget {
   /// no separate bottom offset.
   static const double _kBottomMargin = 8.0;
 
+  /// How far the pill sits below the package position. The package's
+  /// `insets` also scales the pill's padding, corner radius and side
+  /// margins, so lowering `insets` further would shrink the pill itself;
+  /// the shell shifts it down by this much instead, keeping the pill's
+  /// look (glass, gold active, icons, labels) unchanged. 8 sits the pill
+  /// right above the home-indicator zone.
+  static const double lowerBy = 8.0;
+
   /// Vertical space the floating nav occupies above the system bottom
   /// inset — the shell reserves this so content clears the bar. The
   /// package's [LiquidGlassNavBar.contentBottomInset] (96) is pill 68 +
