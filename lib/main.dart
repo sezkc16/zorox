@@ -168,14 +168,44 @@ class _AppRootState extends State<AppRoot> {
     _init();
   }
 
+  /// How long one startup future may run before the app proceeds without it.
+  /// A Future that never completes used to freeze the app on the loading
+  /// screen forever (+18: black screen, frozen spinner); now the slow one is
+  /// named in the log and the launch goes on with defaults.
+  static const _initTimeout = Duration(seconds: 10);
+
+  /// Awaits [future] for at most [_initTimeout]. On timeout the launch
+  /// proceeds (the future keeps running in the background); a real failure
+  /// still rethrows so the outer catch shows the error screen.
+  Future<void> _initWithTimeout(Future<void> future, String name) async {
+    final stopwatch = Stopwatch()..start();
+    try {
+      await future.timeout(
+        _initTimeout,
+        onTimeout: () {
+          debugPrint(
+            '[AppRoot] INIT TIMEOUT: $name did not finish in '
+            '${_initTimeout.inSeconds}s — proceeding without it',
+          );
+        },
+      );
+      debugPrint(
+        '[AppRoot] init ok: $name (${stopwatch.elapsedMilliseconds}ms)',
+      );
+    } catch (e) {
+      debugPrint('[AppRoot] INIT FAILED: $name — $e');
+      rethrow;
+    }
+  }
+
   Future<void> _init() async {
     _storageService = StorageService();
     try {
       await Future.wait([
-        _storageService.init(),
-        DohService.instance.init(),
+        _initWithTimeout(_storageService.init(), 'StorageService.init'),
+        _initWithTimeout(DohService.instance.init(), 'DohService.init'),
         // Saved bot-check clearances; opens no browser.
-        Clearance.instance.init(),
+        _initWithTimeout(Clearance.instance.init(), 'Clearance.init'),
         if (Platform.isAndroid)
           FlutterDisplayMode.setHighRefreshRate().catchError((Object e) {
             if (kDebugMode) debugPrint("Error setting high refresh rate: $e");
@@ -183,7 +213,13 @@ class _AppRootState extends State<AppRoot> {
       ]);
 
       // The developer option's QoE switch, kept across launches.
-      QoeLog.writeToAppLog = _storageService.getDevQoeLog();
+      // Guarded: if storage init timed out above, its boxes may not be open
+      // yet — a throw here must not turn a recovered launch into an error.
+      try {
+        QoeLog.writeToAppLog = _storageService.getDevQoeLog();
+      } catch (e) {
+        debugPrint('[AppRoot] getDevQoeLog failed (storage may have timed out): $e');
+      }
 
       if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
         final alwaysOnTop = _storageService.isAlwaysOnTop();
