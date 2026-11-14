@@ -85,6 +85,14 @@ class _GoldenSubtitleStyleDrawerState
   List<VlcTrackDescription> _tracks = const <VlcTrackDescription>[];
   int _trackRevision = -1;
 
+  /// Monotonic token for [getSubtitleTracks] flights: a refresh that
+  /// started earlier must never overwrite a newer one. A tap bumps the
+  /// track revision, so several refreshes can be in flight at once while
+  /// the HLS list settles; without the token a stale snapshot (the
+  /// pre-tap list) could swap in after the fresh one and the rows would
+  /// ghost/overlap for a frame.
+  int _refreshToken = 0;
+
   @override
   void initState() {
     super.initState();
@@ -111,9 +119,10 @@ class _GoldenSubtitleStyleDrawerState
   }
 
   Future<void> _refreshTracks() async {
+    final token = ++_refreshToken;
     final revision = widget.controller.value.trackRevision;
     final tracks = await widget.controller.getSubtitleTracks();
-    if (!mounted) return;
+    if (!mounted || token != _refreshToken) return;
     // Guard against an engine that reports one id twice: two rows with
     // one key make Flutter reuse the wrong element and the rows
     // ghost/overlap on rebuild. First occurrence wins.
@@ -121,9 +130,22 @@ class _GoldenSubtitleStyleDrawerState
     final deduped = tracks
         .where((track) => seenIds.add(track.id))
         .toList(growable: false);
+    // The merged snapshot is stable across a tap: when the new list has
+    // the same ids in the same order, keep the same list object and only
+    // repaint the selection — swapping the list would rebuild every row
+    // element and could ghost/overlap for a frame.
+    var sameList = _tracks.length == deduped.length;
+    if (sameList) {
+      for (var i = 0; i < deduped.length; i++) {
+        if (_tracks[i].id != deduped[i].id) {
+          sameList = false;
+          break;
+        }
+      }
+    }
     setState(() {
       _trackRevision = revision;
-      _tracks = deduped;
+      if (!sameList) _tracks = deduped;
     });
   }
 

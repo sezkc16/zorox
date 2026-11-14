@@ -308,6 +308,74 @@ class _MpvPlaybackClock extends ChangeNotifier implements VlcPlaybackClock {
   }
 }
 
+/// Which merged subtitle row the drawer lights as active, given the
+/// engine's current subtitle track and the viewer's explicit pick.
+///
+/// [pickedMergeKey] is the tap's anchor (see [MpvVlcController]'s
+/// `_pickedSubtitleKey`): while the picked subtitle still exists in this
+/// snapshot it wins over whatever the engine says right now, because the
+/// engine's read-back lags and can momentarily report 'auto' or a merged
+/// twin's sid while the HLS track list settles — without the anchor a tap
+/// reverted to the auto-selected row a second later (v20+22). With no
+/// pick, the engine's word governs, resolved through the merged rows the
+/// same way the +22 read-back did: 'auto' → default-flagged embedded
+/// track else the first; a side-car file → its row by title; an embedded
+/// track → its merged row by sid. Pure, so the tap-stickiness rule is
+/// testable without a player.
+int? resolveActiveSubtitleRowId({
+  required (String, String)? pickedMergeKey,
+  required SubtitleTrack current,
+  required List<SubtitleRow> rows,
+  required List<SubtitleFile> external,
+  required List<SubtitleTrack> embedded,
+}) {
+  if (current.id == 'no') return null;
+  // The viewer's pick, while it still exists in this snapshot.
+  if (pickedMergeKey != null) {
+    for (final row in rows) {
+      if (row.mergeKey == pickedMergeKey) return row.id;
+    }
+    // The picked subtitle is gone from this source; fall through to the
+    // engine's word.
+  }
+  if (current.id == 'auto') {
+    // mpv auto-selected: it plays the default-flagged subtitle track,
+    // else the first one — the same rule mpv itself uses. The engine
+    // never reports which one it picked, so resolve it here, or the
+    // drawer would read "Off" while a subtitle renders. The id
+    // returned is the merged row's id, so a track that merged into
+    // its (source) row lights that row.
+    if (embedded.isEmpty) return null;
+    final def = embedded.indexWhere((t) => t.isDefault == true);
+    final track = embedded[def >= 0 ? def : 0];
+    final key = subtitleMergeKey(
+      language: track.language,
+      title: track.title ?? '',
+    );
+    for (final row in rows) {
+      if (row.mergeKey == key) return row.id;
+    }
+    return int.tryParse(track.id) ?? (def >= 0 ? def : 0);
+  }
+  // An external file the screen added: mpv reports it under its title.
+  final externalIndex = external.indexWhere(
+    (f) => f.label == current.title,
+  );
+  if (externalIndex >= 0) return _externalIdBase + externalIndex;
+  // mpv's own word for the track playing: its sid, read back from the
+  // engine — never the position in a list that may since have moved.
+  // Mapped through the merged rows, so a track that merged into its
+  // (source) row lights that row instead of none.
+  final sid = int.tryParse(current.id);
+  if (sid == null) return null;
+  for (final row in rows) {
+    if (row.embedded != null && row.embedded!.id == current.id) {
+      return row.id;
+    }
+  }
+  return sid;
+}
+
 /// The mpv engine, speaking the stock UI's language.
 class MpvVlcController implements VlcPlayerController {
   MpvVlcController({
@@ -335,6 +403,33 @@ class MpvVlcController implements VlcPlayerController {
 
   /// Whether the PiP window is up. Always false on mpv.
   final ValueNotifier<bool> _pictureInPicture = ValueNotifier<bool>(false);
+
+  /// The viewer's explicit subtitle pick, as a merge key — not a row id, so
+  /// it survives the merged snapshot being rebuilt with shifted ids.
+  ///
+  /// The engine's read-back lags and can momentarily report 'auto' or a
+  /// merged twin's sid while the HLS track list settles, which re-lit the
+  /// auto-selected row after a tap (v20+22: tap "English (source)", a second
+  /// later the drawer showed "English (- (Crunchyroll)) (source)"). The
+  /// anchor is the tap's authority: while the picked subtitle still exists
+  /// in the current snapshot, the drawer lights it whatever the engine
+  /// says right now. Cleared when the viewer picks Off and when a new
+  /// source starts ([noteNewSource]); the screen's auto-select bypasses the
+  /// adapter, so the anchor stays null until a real tap and the engine's
+  /// word governs at open.
+  (String, String)? _pickedSubtitleKey;
+
+  /// The media changed (new source / episode / failover): forget the
+  /// viewer's subtitle pick. The pick belongs to the old media; on the new
+  /// one the remembered pick is re-applied through [setSubtitleTrack] and
+  /// re-anchors there, and until then the engine's read-back is the truth.
+  ///
+  /// NOT called on a same-index re-open (stall recovery): the media is the
+  /// same, the remembered pick is re-applied, and the anchor keeps the
+  /// drawer on it while the re-application lands.
+  void noteNewSource() {
+    _pickedSubtitleKey = null;
+  }
 
   final _MpvPlaybackClock _clock = _MpvPlaybackClock();
 
@@ -606,49 +701,13 @@ class MpvVlcController implements VlcPlayerController {
     return _trackId(track.id, def >= 0 ? def : 0);
   }
 
-  int? _activeSubtitleId() {
-    final current = _player.state.track.subtitle;
-    if (current.id == 'no') return null;
-    final rows = _subtitleRows;
-    if (current.id == 'auto') {
-      // mpv auto-selected: it plays the default-flagged subtitle track,
-      // else the first one — the same rule mpv itself uses. The engine
-      // never reports which one it picked, so resolve it here, or the
-      // drawer would read "Off" while a subtitle renders. The id
-      // returned is the merged row's id, so a track that merged into
-      // its (source) row lights that row.
-      final embedded = _embeddedSubtitles;
-      if (embedded.isEmpty) return null;
-      final def = embedded.indexWhere((t) => t.isDefault == true);
-      final track = embedded[def >= 0 ? def : 0];
-      final key = subtitleMergeKey(
-        language: track.language,
-        title: track.title ?? '',
-      );
-      for (final row in rows) {
-        if (row.mergeKey == key) return row.id;
-      }
-      return _trackId(track.id, def >= 0 ? def : 0);
-    }
-    // An external file the screen added: mpv reports it under its title.
-    final external = _externalSubtitlesDeduped;
-    final externalIndex = external.indexWhere(
-      (f) => f.label == current.title,
-    );
-    if (externalIndex >= 0) return _externalIdBase + externalIndex;
-    // mpv's own word for the track playing: its sid, read back from the
-    // engine — never the position in a list that may since have moved.
-    // Mapped through the merged rows, so a track that merged into its
-    // (source) row lights that row instead of none.
-    final sid = int.tryParse(current.id);
-    if (sid == null) return null;
-    for (final row in rows) {
-      if (row.embedded != null && row.embedded!.id == current.id) {
-        return row.id;
-      }
-    }
-    return sid;
-  }
+  int? _activeSubtitleId() => resolveActiveSubtitleRowId(
+    pickedMergeKey: _pickedSubtitleKey,
+    current: _player.state.track.subtitle,
+    rows: _subtitleRows,
+    external: _externalSubtitlesDeduped,
+    embedded: _embeddedSubtitles,
+  );
 
   /// The audio/subtitle row's display name — see [subtitleDisplayName].
   String _trackDisplayName({
@@ -1010,20 +1069,41 @@ class MpvVlcController implements VlcPlayerController {
     if (row == null) return;
     final file = row.external;
     if (file != null) {
+      // Idempotent: the screen re-applies the remembered pick on every
+      // tracks event, and a fresh `sub-add` each time accumulated a
+      // duplicate external track in mpv, which fired another tracks
+      // event — a self-sustaining churn that kept rebuilding the drawer
+      // (the tap glitch) and re-derived the active row from mpv's
+      // volatile state. When this file is already the current subtitle,
+      // there is nothing to add; just re-anchor and publish.
+      final current = _player.state.track.subtitle;
+      if (current.uri == true && current.id == file.url) {
+        _pickedSubtitleKey = row.mergeKey;
+        publish();
+        return;
+      }
       await _player.setSubtitleTrack(
         SubtitleTrack.uri(file.url, title: file.label),
       );
+      _pickedSubtitleKey = row.mergeKey;
       publish();
       return;
     }
     final track = row.embedded;
     if (track == null) return;
+    if (_player.state.track.subtitle.id == track.id) {
+      _pickedSubtitleKey = row.mergeKey;
+      publish();
+      return;
+    }
     await _player.setSubtitleTrack(track);
+    _pickedSubtitleKey = row.mergeKey;
     publish();
   }
 
   @override
   Future<void> disableSubtitle() async {
+    _pickedSubtitleKey = null;
     await _player.setSubtitleTrack(SubtitleTrack.no());
     publish();
   }

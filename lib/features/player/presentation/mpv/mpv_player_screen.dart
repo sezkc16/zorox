@@ -1109,6 +1109,12 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
 
   Future<void> _openStream(int index, {Duration? start}) async {
     if (_disposed || _streams.isEmpty) return;
+    // A genuinely different source (failover / source pick) ends the old
+    // subtitle pick: the adapter's anchor belongs to the old media. A
+    // same-index re-open (stall recovery) keeps it — the media is the
+    // same, the remembered pick is re-applied, and the anchor holds the
+    // drawer on it while the re-application lands.
+    if (index != _streamIndex) _adapter.noteNewSource();
     _streamIndex = index;
     _startedPlaying = false;
     _subtitleAppliedFor = -1;
@@ -1625,6 +1631,7 @@ class _MpvPlayerScreenState extends ConsumerState<MpvPlayerScreen>
     _subtitleAppliedFor = -1;
     _rememberedAudioId = null;
     _rememberedSubtitleId = null;
+    _adapter.noteNewSource();
     _position = Duration.zero;
     _duration = Duration.zero;
     _buffered = Duration.zero;
