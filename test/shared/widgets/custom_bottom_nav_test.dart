@@ -5,7 +5,8 @@ import 'package:skystream/l10n/generated/app_localizations.dart';
 import 'package:skystream/shared/widgets/custom_bottom_nav.dart';
 
 /// The v20 bar: the `liquid_glass_bottom_nav` package's floating glass pill
-/// with the five Reicon (Filled) icons. The package renders its glass only
+/// with the five Reicon icons — Filled, except Search which is Outline
+/// (M M, 2026-11-14). The package renders its glass only
 /// on Impeller; in the test environment the renderer falls back, but the
 /// tabs, labels, selection colour and tap routing are all plain widgets and
 /// are what this tests.
@@ -49,7 +50,9 @@ void main() {
     await pump(tester, Brightness.dark);
     await tester.pumpAndSettle();
     expect(find.byIcon(ReiconFilledIcons.home), findsOneWidget);
-    expect(find.byIcon(ReiconFilledIcons.search), findsOneWidget);
+    // Search is Outline, not Filled (M M, 2026-11-14); the other four
+    // stay Filled.
+    expect(find.byIcon(ReiconIcons.search), findsOneWidget);
     expect(find.byIcon(ReiconFilledIcons.puzzle), findsOneWidget);
     expect(find.byIcon(ReiconFilledIcons.library), findsOneWidget);
     expect(find.byIcon(ReiconFilledIcons.grid), findsOneWidget);

@@ -9,8 +9,9 @@ import 'package:skystream/l10n/generated/app_localizations.dart';
 /// package (0.0.14): a floating frosted-glass pill with a physics sliding
 /// bubble, drag-to-switch and haptics.
 ///
-/// The five tabs use the Reicon icon font (Filled) as plain [IconData]
-/// (`ReiconFilledIcons.home/.search/.puzzle/.library/.grid`), so the exact
+/// The five tabs use the Reicon icon font as plain [IconData] — Filled
+/// (`ReiconFilledIcons.home/.puzzle/.library/.grid`), except Search which
+/// is Outline (`ReiconIcons.search`, per M M 2026-11-14) — so the exact
 /// same icons render on iOS and Android — the font is bundled in the app,
 /// no per-platform work, no asset files.
 ///
@@ -78,7 +79,9 @@ class CustomBottomNavBar extends StatelessWidget {
         LiquidGlassNavItem(
           id: 'search',
           label: localizations.search,
-          icon: ReiconFilledIcons.search,
+          // Outline, not Filled — M M asked for the outline search icon
+          // (2026-11-14); the other four tabs stay Filled.
+          icon: ReiconIcons.search,
         ),
         const LiquidGlassNavItem(
           id: 'plugins',
