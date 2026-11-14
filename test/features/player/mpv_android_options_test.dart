@@ -29,7 +29,7 @@ void main() {
 
   group('kMpvAndroidOptions', () {
     test('carries the safe presentation options', () {
-      expect(kMpvAndroidOptions['video-sync'], 'display-vdrop');
+      expect(kMpvAndroidOptions['video-sync'], 'display-resample');
       expect(kMpvAndroidOptions['framedrop'], 'decoder+vo');
       expect(kMpvAndroidOptions['hwdec-software-fallback'], '300');
     });

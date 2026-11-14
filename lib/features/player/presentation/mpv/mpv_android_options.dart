@@ -24,11 +24,13 @@
 ///      first open (the same escape hatch v20+1 used; the mechanism was
 ///      never the problem — the `hdr-compute-peak=yes` VALUE was, and it
 ///      is NOT in this map, never add it):
-///        * `video-sync: display-vdrop` — sync to the display's vsync
-///          and drop/duplicate video frames to match it, instead of
-///          mpv's default `video-sync=audio` (24 fps film on a 120 Hz
-///          phone judders under `audio`). A presentation option; it
-///          cannot blank the picture.
+///        * `video-sync: display-resample` — retime the audio to the
+///          display's clock, so 24 fps film stays locked to whatever rate
+///          the panel is on. +9 used `display-vdrop` here; vdrop can only
+///          drop/duplicate whole frames, and the Flip 5's adaptive 120 Hz
+///          panel switches rates as the viewer watches, so vdrop juddered
+///          on every switch. A presentation option; it cannot blank the
+///          picture.
 ///        * `framedrop: decoder+vo` — when the decoder or the video
 ///          output cannot keep up, drop frames instead of letting A/V
 ///          drift grow. Same safety as above.
@@ -79,7 +81,15 @@ String mpvHwdecForPlatform(TargetPlatform platform) {
 ///     (`vo=gpu` + `gpu-context=android` on Android, `vo=libmpv` on
 ///     iOS); changing it breaks the Flutter texture.
 const Map<String, String> kMpvAndroidOptions = <String, String>{
-  'video-sync': 'display-vdrop',
+  // `display-resample`, not `display-vdrop` (+9's pick): the Flip 5's panel
+  // is an adaptive 120 Hz display whose refresh rate switches as the
+  // viewer watches, and vdrop judders on every rate switch — it can only
+  // drop/duplicate whole frames to match a moving target. Resample instead
+  // retimes the audio to the display's clock, so 24 fps film stays locked
+  // to whatever rate the panel is on with no dropped frames and no drift.
+  // The pitch shift is a fraction of a percent and inaudible. iOS is
+  // untouched — its path is smooth as it is.
+  'video-sync': 'display-resample',
   'framedrop': 'decoder+vo',
   'hwdec-software-fallback': '300',
 };
